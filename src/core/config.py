@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-MODEL = "gemini-3.8-flash"
+MODEL = "gemini-3.5-flash-lite"
 TIMEOUT_MS = 30_000
 
 def criar_cliente_gemini() -> genai.Client:
