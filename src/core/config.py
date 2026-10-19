@@ -23,5 +23,5 @@ def obter_status_configuracao(nome_squad: str) -> str:
     return f"Squad '{nome_squad}' | Modelo: {MODEL} | Timeout: {TIMEOUT_MS}ms"
 
 if __name__ == "__main__":
-    print(obter_status_configuracao("Squad Alpha"))
+    print(obter_status_configuracao("Squad 5"))
     print("Configuracao centralizada carregada com sucesso!")
