@@ -21,10 +21,14 @@ def inicializar_banco() -> None:
         """)
         # TODO: Adicione registros realistas adaptados ao caso da sua squad!
         dados = [
-            ("A101", "Sensor Termico Industrial", 25.0, "Hardware"),
-            ("B202", "Cabo de Rede Blindado Cat6", 10.0, "Redes"),
-            ("C303", "Modulo Controlador PLC", 150.0, "Automacao"),
-            ("D404", "Licenca Servidor Cloud Pro", 300.0, "Software")
+            ("N101", "Nota Fiscal de Servicos - Consultoria TI", 2500.00, "Servicos"),
+            ("N202", "Nota Fiscal de Produtos - Equipamentos", 4750.50, "Produtos"),
+            ("N303", "Fatura de Licenciamento de Software", 899.90, "Software"),
+            ("N404", "Nota Fiscal de Manutencao de Hardware", 1250.00, "Manutencao"),
+            ("N505", "Fatura de Servicos de Cloud", 680.75, "Infraestrutura"),
+            ("N606", "Nota Fiscal de Material de Escritorio", 345.80, "Suprimentos"),
+            ("N707", "Fatura de Telecomunicacoes", 219.99, "Telecomunicacoes"),
+            ("N808", "Nota Fiscal de Consultoria Financeira", 1800.00, "Consultoria")
         ]
         conn.executemany("INSERT OR IGNORE INTO itens VALUES (?, ?, ?, ?)", dados)
         conn.commit()
