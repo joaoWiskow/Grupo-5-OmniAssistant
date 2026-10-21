@@ -7,6 +7,7 @@ import wave
 from google.genai import types
 
 from src.core.config import MODEL, criar_cliente_gemini
+from src.core.resiliencia import gerar_conteudo
 
 # Tamanhos do resumo falado: (instrucao ao resumidor, limite de caracteres).
 # Respostas ate o limite sao lidas inteiras, sem passar pelo resumidor.
@@ -79,7 +80,9 @@ def resumir_para_voz(texto: str, tamanho: str = TAMANHO_PADRAO) -> str:
 
     try:
         cliente = criar_cliente_gemini()
-        resposta = cliente.models.generate_content(
+        # Semáforo (8 simultâneas) + retry em 429/503 (1 s, 2 s, 4 s).
+        resposta = gerar_conteudo(
+            cliente,
             model=MODEL,
             contents=texto,
             config=types.GenerateContentConfig(
@@ -105,7 +108,8 @@ def sintetizar_voz(texto: str, voz: str = VOZES[0], estilo: str = "Mordomo digit
 
     for modelo in MODELOS_TTS:
         try:
-            resposta = cliente.models.generate_content(
+            resposta = gerar_conteudo(
+                cliente,
                 model=modelo,
                 contents=f"Diga em português brasileiro, {instrucao}: {texto}",
                 config=types.GenerateContentConfig(

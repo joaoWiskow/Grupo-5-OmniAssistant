@@ -71,34 +71,35 @@ def renderizar_risco(risco: dict):
 
 
 def renderizar_telemetria(telemetria: dict):
+    """Semáforo de risco sempre visível; chips e auditoria ficam num único expander."""
     renderizar_risco(telemetria.get("risco"))
     tempo_ms = telemetria.get("tempo_total_ms", 0)
     tokens = telemetria.get("tokens_estimados", "N/A")
     turnos = telemetria.get("total_turnos", 1)
-
-    st.markdown(
-        f'<div class="chips"><span class="chip">TEMPO <b>{tempo_ms} ms</b></span>'
-        f'<span class="chip">TURNOS <b>{turnos}</b></span>'
-        f'<span class="chip">TOKENS <b>{tokens}</b></span></div>',
-        unsafe_allow_html=True,
-    )
-
     rastro = telemetria.get("rastro_ferramentas", [])
-    if rastro:
-        with st.expander(f"Auditoria de ferramentas ({len(rastro)} ações)"):
-            for idx, tool in enumerate(rastro, start=1):
-                st.markdown(f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
-                res = tool["resultado"] or {}
-                if tool["ferramenta"] == "consultar_banco" and res.get("colunas"):
-                    st.code(tool["argumentos"].get("sql", ""), language="sql")
-                    st.dataframe(
-                        [dict(zip(res["colunas"], linha)) for linha in res["linhas"]],
-                        use_container_width=True,
-                    )
-                    if res.get("truncado"):
-                        st.caption("Resultado truncado no limite de linhas.")
-                else:
-                    st.json({"argumentos": tool["argumentos"], "resultado_banco": tool["resultado"]})
+
+    titulo = f"Detalhes · {tempo_ms} ms · {len(rastro)} ferramenta(s)"
+    with st.expander(titulo):
+        st.markdown(
+            f'<div class="chips"><span class="chip">TEMPO <b>{tempo_ms} ms</b></span>'
+            f'<span class="chip">TURNOS <b>{turnos}</b></span>'
+            f'<span class="chip">TOKENS <b>{tokens}</b></span></div>',
+            unsafe_allow_html=True,
+        )
+        # Sem expander interno: o Streamlit não aceita expander dentro de expander.
+        for idx, tool in enumerate(rastro, start=1):
+            st.markdown(f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
+            res = tool["resultado"] or {}
+            if tool["ferramenta"] == "consultar_banco" and res.get("colunas"):
+                st.code(tool["argumentos"].get("sql", ""), language="sql")
+                st.dataframe(
+                    [dict(zip(res["colunas"], linha)) for linha in res["linhas"]],
+                    use_container_width=True,
+                )
+                if res.get("truncado"):
+                    st.caption("Resultado truncado no limite de linhas.")
+            else:
+                st.json({"argumentos": tool["argumentos"], "resultado_banco": tool["resultado"]})
 
 
 # ---------------------------------------------------------------------------
@@ -365,16 +366,20 @@ with st.sidebar:
         value=False,
         help="Respostas longas são resumidas e o resumo é lido em voz alta. A resposta completa continua na tela.",
     )
-    voz_escolhida = st.selectbox("Voz do assistente", VOZES, disabled=not voz_ativa)
-    estilo_voz = st.selectbox("Estilo de fala", list(ESTILOS), disabled=not voz_ativa)
-    ritmo_voz = st.select_slider("Ritmo da fala", options=list(RITMOS), value="Ágil", disabled=not voz_ativa)
-    tamanho_resumo = st.radio(
-        "Tamanho do resumo falado",
-        list(TAMANHOS),
-        index=list(TAMANHOS).index(TAMANHO_PADRAO),
-        horizontal=True,
-        disabled=not voz_ativa,
-    )
+    # Valores iniciais: só são usados quando voz_ativa é verdadeiro.
+    voz_escolhida, estilo_voz = VOZES[0], list(ESTILOS)[0]
+    ritmo_voz, tamanho_resumo = "Ágil", TAMANHO_PADRAO
+    if voz_ativa:
+        with st.expander("Ajustes da voz"):
+            voz_escolhida = st.selectbox("Voz do assistente", VOZES)
+            estilo_voz = st.selectbox("Estilo de fala", list(ESTILOS))
+            ritmo_voz = st.select_slider("Ritmo da fala", options=list(RITMOS), value="Ágil")
+            tamanho_resumo = st.radio(
+                "Tamanho do resumo falado",
+                list(TAMANHOS),
+                index=list(TAMANHOS).index(TAMANHO_PADRAO),
+                horizontal=True,
+            )
 
     if st.button("Limpar sessão e cache"):
         st.session_state["historico_mensagens"].clear()
@@ -385,16 +390,13 @@ with st.sidebar:
         st.rerun()
 
 novas_evidencias = []
-col_preview1, col_preview2 = st.columns(2)
+previews_audio = []
 
 if upload_img:
-    with col_preview1:
-        st.subheader("Imagem")
-        st.image(upload_img, use_container_width=True)
-        try:
-            novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
-        except Exception as e:
-            st.error(f"Erro ao processar imagem: {e}")
+    try:
+        novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
+    except Exception as e:
+        st.error(f"Erro ao processar imagem: {e}")
 
 fontes_audio = []
 if upload_audio:
@@ -403,26 +405,36 @@ if mic_audio:
     fontes_audio.append((mic_audio, "gravacao.wav", "Gravação", True))
 
 for arquivo, nome, rotulo, eh_mic in fontes_audio:
-    with col_preview2:
-        st.subheader(rotulo)
-        st.audio(arquivo)
-        try:
-            ev_audio = ingerir_cache("audio", nome, arquivo.getvalue())
-            novas_evidencias.append(ev_audio)
-            with st.expander(f"Transcrição Whisper ({rotulo.lower()})"):
-                st.write(ev_audio.resumo_informacao)
+    try:
+        ev_audio = ingerir_cache("audio", nome, arquivo.getvalue())
+        novas_evidencias.append(ev_audio)
+        previews_audio.append((rotulo, arquivo, ev_audio))
 
-            # Gravação nova no microfone: dispara o comando automaticamente
-            if eh_mic:
-                marca = hashlib.md5(arquivo.getvalue()).hexdigest()
-                if marca != st.session_state["mic_processado"]:
-                    st.session_state["mic_processado"] = marca
-                    st.session_state["pergunta_pendente"] = (
-                        "Interprete e execute o comando de voz da gravação, "
-                        "usando as ferramentas quando necessário."
-                    )
-        except Exception as e:
-            st.error(f"Erro ao processar áudio: {e}")
+        # Gravação nova no microfone: dispara o comando automaticamente
+        if eh_mic:
+            marca = hashlib.md5(arquivo.getvalue()).hexdigest()
+            if marca != st.session_state["mic_processado"]:
+                st.session_state["mic_processado"] = marca
+                st.session_state["pergunta_pendente"] = (
+                    "Interprete e execute o comando de voz da gravação, "
+                    "usando as ferramentas quando necessário."
+                )
+    except Exception as e:
+        st.error(f"Erro ao processar áudio: {e}")
+
+# Pré-visualização compacta: tudo dentro de um expander recolhido
+if upload_img or previews_audio:
+    with st.expander(f"Evidências ativas ({len(novas_evidencias)})"):
+        col_img, col_aud = st.columns(2)
+        with col_img:
+            if upload_img:
+                st.image(upload_img, width=220, caption=upload_img.name)
+        with col_aud:
+            for rotulo, arquivo, ev_audio in previews_audio:
+                st.markdown(f"**{rotulo}**")
+                st.audio(arquivo)
+                st.caption("Transcrição Whisper")
+                st.write(ev_audio.resumo_informacao)
 
 st.session_state["evidencias_ativas"] = novas_evidencias
 
@@ -441,12 +453,12 @@ EXEMPLOS = [
     "Quais são os 5 clientes que mais compraram?",
 ]
 if not st.session_state["historico_mensagens"]:
-    st.markdown('<p class="sub">Experimente uma pergunta sobre o banco de dados:</p>', unsafe_allow_html=True)
-    colunas_ex = st.columns(2)
-    for i, exemplo in enumerate(EXEMPLOS):
-        if colunas_ex[i % 2].button(exemplo, key=f"exemplo_{i}", use_container_width=True):
-            st.session_state["pergunta_pendente"] = exemplo
-            st.rerun()
+    with st.expander("Sugestões de pergunta"):
+        colunas_ex = st.columns(2)
+        for i, exemplo in enumerate(EXEMPLOS):
+            if colunas_ex[i % 2].button(exemplo, key=f"exemplo_{i}", use_container_width=True):
+                st.session_state["pergunta_pendente"] = exemplo
+                st.rerun()
 
 comando_chat = st.chat_input("Pergunte sobre as evidências ou peça uma ação")
 pergunta = comando_chat or st.session_state["pergunta_pendente"]

@@ -7,9 +7,26 @@ from google.genai import types
 
 from src.core.config import MODEL, criar_cliente_gemini
 from src.core.contracts import EvidenciaMultimodal
+from src.core.resiliencia import gerar_conteudo
 from src.tools.local import consultar_item, calcular_total, validar_codigo
 from src.tools.validacao import validar_cnpj_cpf, conferir_soma
-from src.tools.dados import consultar_banco, descrever_banco
+from src.tools.dados import consultar_banco, descrever_banco, esquema_para_prompt
+
+_ESQUEMA_CACHE: str | None = None
+
+
+def _esquema_banco() -> str:
+    """Lido uma vez por processo; só guarda no cache se vier válido."""
+    global _ESQUEMA_CACHE
+    if _ESQUEMA_CACHE is None:
+        try:
+            texto = esquema_para_prompt()
+        except Exception:
+            return ""
+        if texto:
+            _ESQUEMA_CACHE = texto
+        return texto
+    return _ESQUEMA_CACHE
 
 
 class CodigoArgs(BaseModel):
@@ -262,8 +279,8 @@ def executar_agente(
         "uma divergencia. "
         "Perguntas sobre clientes, notas cadastradas, faturamento, status de "
         "cobranca ou outros dados da empresa NAO dependem das evidencias "
-        "enviadas: responda consultando o banco. Se ainda nao conhecer o "
-        "esquema, use descrever_banco primeiro; depois use consultar_banco com "
+        "enviadas: responda consultando o banco. O esquema esta no fim destas "
+        "instrucoes: use consultar_banco direto, sem chamar descrever_banco antes, com "
         "uma unica consulta SELECT, usando agregacoes (COUNT, SUM, GROUP BY) em "
         "vez de listar linhas quando a pergunta pedir totais ou rankings. Se a "
         "consulta falhar, corrija-a e tente de novo. Responda apenas com o que "
@@ -271,6 +288,13 @@ def executar_agente(
         "foi truncado. Voce so le o banco: nunca diga que inseriu, alterou ou "
         "apagou registros. Nao misture dados do banco com os da nota enviada."
     )
+
+    esquema = _esquema_banco()
+    if esquema:
+        system_instruction += (
+            "\n\nESQUEMA DO BANCO (use exatamente estes nomes de tabelas, "
+            "colunas e valores):\n" + esquema
+        )
 
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
@@ -284,7 +308,9 @@ def executar_agente(
     for turno in range(6):
         emitir(tipo="turno", n=turno + 1)
 
-        resposta = cliente.models.generate_content(
+        # Semáforo (8 simultâneas) + retry em 429/503 (1 s, 2 s, 4 s).
+        resposta = gerar_conteudo(
+            cliente,
             model=MODEL,
             contents=historico,
             config=config,

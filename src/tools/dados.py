@@ -271,3 +271,42 @@ def consultar_banco(sql: str) -> dict:
         return {"erro": f"Consulta inválida ou não permitida: {type(e).__name__}: {e}"}
     finally:
         con.close()
+        
+# Colunas de poucos valores: o modelo precisa ver a grafia exata (acentos, caixa).
+_CATEGORICAS = {
+    "clientes": ["estado", "segmento"],
+    "notas_fiscais": ["status"],
+}
+
+
+def esquema_para_prompt() -> str:
+    """Esquema compacto (tabelas, colunas, valores categóricos) para embutir no prompt."""
+    info = descrever_banco()
+    if "erro" in info:
+        return ""
+
+    linhas = []
+    for t in info["tabelas"]:
+        cols = ", ".join(f'{c["nome"]} {c["tipo"]}' for c in t["colunas"])
+        linhas.append(f'- {t["tabela"]}({cols})')
+        if t["descricao"]:
+            linhas.append(f'  {t["descricao"]}')
+
+    con = _conexao_leitura()
+    try:
+        for tabela, colunas in _CATEGORICAS.items():
+            for col in colunas:
+                try:
+                    valores = [r[0] for r in con.execute(
+                        f'SELECT DISTINCT "{col}" FROM "{tabela}" '
+                        f'WHERE "{col}" IS NOT NULL ORDER BY 1'
+                    )]
+                except sqlite3.Error:
+                    continue
+                if valores:
+                    linhas.append(f"Valores de {tabela}.{col}: " + ", ".join(map(str, valores)))
+    finally:
+        con.close()
+
+    linhas.extend(info.get("observacoes", []))
+    return "\n".join(linhas)
