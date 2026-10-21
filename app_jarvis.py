@@ -60,6 +60,47 @@ def renderizar_voz(voz: dict, autoplay: bool = False):
         st.write(voz["resumo"])
 
 
+def montar_markdown(pergunta: str, resposta: str, telemetria: dict | None = None) -> str:
+    """Monta o .md da resposta: pergunta, resposta, risco e ferramentas usadas."""
+    partes = []
+    if pergunta:
+        partes.append(f"## Pergunta\n\n{pergunta}\n")
+    partes.append(f"## Resposta\n\n{resposta}\n")
+
+    if telemetria:
+        risco = telemetria.get("risco")
+        if risco and risco.get("nivel") != "neutro":
+            motivos = "; ".join(risco.get("motivos", []))
+            partes.append(f"## Risco\n\n**{risco['rotulo']}**" + (f" — {motivos}" if motivos else "") + "\n")
+
+        rastro = telemetria.get("rastro_ferramentas", [])
+        if rastro:
+            linhas = ["## Ferramentas utilizadas\n"]
+            for i, tool in enumerate(rastro, start=1):
+                linhas.append(f"{i}. `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
+                sql = tool.get("argumentos", {}).get("sql")
+                if sql:
+                    linhas.append(f"\n```sql\n{sql.strip()}\n```\n")
+            partes.append("\n".join(linhas))
+
+        partes.append(
+            f"---\n*Tempo: {telemetria.get('tempo_total_ms', 0)} ms · "
+            f"Turnos: {telemetria.get('total_turnos', 1)} · "
+            f"Tokens: {telemetria.get('tokens_estimados', 'N/A')}*"
+        )
+    return "\n".join(partes)
+
+
+def renderizar_exportacao(pergunta: str, resposta: str, telemetria: dict | None, chave: str):
+    st.download_button(
+        "Exportar .md",
+        data=montar_markdown(pergunta, resposta, telemetria).encode("utf-8"),
+        file_name="resposta_omniassistant.md",
+        mime="text/markdown",
+        key=chave,
+    )
+
+
 def renderizar_risco(risco: dict):
     if not risco or risco.get("nivel") == "neutro":
         return
@@ -146,14 +187,16 @@ h2,h3{font-size:.95rem !important; color:var(--texto);}
 }
 [data-testid="stFileUploaderDropzone"]:hover{background:rgba(0,224,255,.10); border-color:var(--ciano);}
 
-/* Botoes */
-.stButton>button{
+/* Botoes (inclui o botao de exportar) */
+.stButton>button, .stDownloadButton>button{
   background:rgba(0,224,255,.05); color:var(--texto); border:1px solid var(--linha); border-radius:0;
   clip-path:var(--chanfro); padding:.6rem 1.6rem; letter-spacing:.14em; text-transform:uppercase;
   font-weight:600; transition:all .2s;
 }
-.stButton>button:hover{border-color:var(--ciano); color:var(--ciano); background:rgba(0,224,255,.14); box-shadow:0 0 18px rgba(0,224,255,.35);}
-.stButton>button:focus-visible{outline:2px solid var(--reator); outline-offset:2px;}
+.stButton>button:hover, .stDownloadButton>button:hover{
+  border-color:var(--ciano); color:var(--ciano); background:rgba(0,224,255,.14); box-shadow:0 0 18px rgba(0,224,255,.35);
+}
+.stButton>button:focus-visible, .stDownloadButton>button:focus-visible{outline:2px solid var(--reator); outline-offset:2px;}
 .stButton>button[kind="primary"]{
   background:rgba(255,122,26,.12); color:var(--reator); border-color:var(--reator);
 }
@@ -438,13 +481,15 @@ if upload_img or previews_audio:
 
 st.session_state["evidencias_ativas"] = novas_evidencias
 
-for msg in st.session_state["historico_mensagens"]:
+for i, msg in enumerate(st.session_state["historico_mensagens"]):
     with st.chat_message(msg["papel"]):
         st.write(msg["conteudo"])
         if msg.get("telemetria"):
             renderizar_telemetria(msg["telemetria"])
         if msg.get("voz"):
             renderizar_voz(msg["voz"])
+        if msg["papel"] == "assistant" and msg.get("telemetria"):
+            renderizar_exportacao(msg.get("pergunta", ""), msg["conteudo"], msg["telemetria"], f"md_{i}")
 
 EXEMPLOS = [
     "De onde vem a maior parte dos clientes?",
@@ -517,9 +562,14 @@ if pergunta:
                 except Exception as e:
                     st.caption(f"Não foi possível gerar a voz: {e}")
 
+            # Índice que a mensagem terá no histórico (calculado antes do append)
+            idx_msg = len(st.session_state["historico_mensagens"])
+            renderizar_exportacao(pergunta, resultado["resposta"], resultado, f"md_{idx_msg}")
+
             st.session_state["historico_mensagens"].append({
                 "papel": "assistant",
                 "conteudo": resultado["resposta"],
+                "pergunta": pergunta,
                 "telemetria": resultado,
                 "voz": voz,
             })
