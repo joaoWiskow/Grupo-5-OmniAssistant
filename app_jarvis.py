@@ -1,18 +1,105 @@
+import hashlib
+import html
+import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from time import sleep
 from tempfile import TemporaryDirectory
 import streamlit as st
 from src.core.contracts import EntradaUsuario, EvidenciaMultimodal
 from src.core.ingestion import despachar_ingestao
 from src.core.agent import executar_agente
+from src.core.voz import ESTILOS, RITMOS, TAMANHOS, TAMANHO_PADRAO, VOZES, preparar_voz
 from src.tools.local import inicializar_banco
+from src.tools.dados import inicializar_dados
 
 st.set_page_config(page_title="OmniAssistant", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
 
 inicializar_banco()
 
-for chave, padrao in {"historico_mensagens": [], "evidencias_ativas": [], "entrou": False, "splash_visto": False}.items():
+
+@st.cache_resource
+def preparar_dados():
+    """Cria as tabelas de clientes e notas e carrega os exemplos (uma vez por processo)."""
+    inicializar_dados()
+
+
+preparar_dados()
+
+for chave, padrao in {"historico_mensagens": [], "evidencias_ativas": [], "entrou": False, "splash_visto": False,
+                       "mic_processado": None, "pergunta_pendente": None}.items():
     if chave not in st.session_state:
         st.session_state[chave] = padrao
+
+@st.cache_data(show_spinner="Processando evidência...", max_entries=32)
+def ingerir_cache(tipo: str, nome: str, conteudo: bytes):
+    """Ingere imagem/áudio uma única vez por arquivo (cache pelo conteúdo)."""
+    with TemporaryDirectory() as tmp_dir:
+        caminho_tmp = Path(tmp_dir) / nome
+        caminho_tmp.write_bytes(conteudo)
+        return despachar_ingestao(EntradaUsuario(tipo=tipo, caminho_arquivo=caminho_tmp))
+
+
+def digitar(texto: str):
+    """Efeito de digitação para a resposta (limitado a ~3 s no total)."""
+    palavras = texto.split(" ")
+    atraso = min(0.02, 3.0 / max(len(palavras), 1))
+    for palavra in palavras:
+        yield palavra + " "
+        sleep(atraso)
+
+
+def renderizar_voz(voz: dict, autoplay: bool = False):
+    """Só o player fica visível; o texto do resumo fica recolhido."""
+    st.markdown('<div class="voz"><b>RESPOSTA FALADA</b></div>', unsafe_allow_html=True)
+    try:
+        st.audio(voz["audio"], format="audio/wav", autoplay=autoplay)
+    except TypeError:  # versões antigas do Streamlit não têm autoplay
+        st.audio(voz["audio"], format="audio/wav")
+    with st.expander("Ver texto do resumo falado"):
+        st.write(voz["resumo"])
+
+
+def renderizar_risco(risco: dict):
+    if not risco or risco.get("nivel") == "neutro":
+        return
+    motivos = " · ".join(html.escape(m) for m in risco.get("motivos", []))
+    st.markdown(
+        f'<div class="risco {risco["nivel"]}"><i></i><b>{html.escape(risco["rotulo"])}</b><span>{motivos}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def renderizar_telemetria(telemetria: dict):
+    renderizar_risco(telemetria.get("risco"))
+    tempo_ms = telemetria.get("tempo_total_ms", 0)
+    tokens = telemetria.get("tokens_estimados", "N/A")
+    turnos = telemetria.get("total_turnos", 1)
+
+    st.markdown(
+        f'<div class="chips"><span class="chip">TEMPO <b>{tempo_ms} ms</b></span>'
+        f'<span class="chip">TURNOS <b>{turnos}</b></span>'
+        f'<span class="chip">TOKENS <b>{tokens}</b></span></div>',
+        unsafe_allow_html=True,
+    )
+
+    rastro = telemetria.get("rastro_ferramentas", [])
+    if rastro:
+        with st.expander(f"Auditoria de ferramentas ({len(rastro)} ações)"):
+            for idx, tool in enumerate(rastro, start=1):
+                st.markdown(f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
+                res = tool["resultado"] or {}
+                if tool["ferramenta"] == "consultar_banco" and res.get("colunas"):
+                    st.code(tool["argumentos"].get("sql", ""), language="sql")
+                    st.dataframe(
+                        [dict(zip(res["colunas"], linha)) for linha in res["linhas"]],
+                        use_container_width=True,
+                    )
+                    if res.get("truncado"):
+                        st.caption("Resultado truncado no limite de linhas.")
+                else:
+                    st.json({"argumentos": tool["argumentos"], "resultado_banco": tool["resultado"]})
+
 
 # ---------------------------------------------------------------------------
 # TEMA HUD
@@ -79,6 +166,31 @@ h2,h3{font-size:.95rem !important; color:var(--texto);}
 [data-testid="stChatInput"]{border-radius:0; border:1px solid var(--linha); background:var(--painel);}
 [data-testid="stChatInput"]:focus-within{border-color:var(--ciano); box-shadow:0 0 16px rgba(0,224,255,.3);}
 
+/* Avatares do chat: nucleo (assistente) e silhueta (usuario) */
+[data-testid="stChatMessageAvatarUser"],
+[data-testid="stChatMessageAvatarAssistant"],
+[data-testid="chatAvatarIcon-user"],
+[data-testid="chatAvatarIcon-assistant"]{
+  width:2.2rem !important; height:2.2rem !important; border-radius:0 !important;
+  background-color:#041826 !important; border:1px solid var(--ciano);
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px);
+}
+[data-testid="stChatMessageAvatarUser"] > *,
+[data-testid="stChatMessageAvatarAssistant"] > *,
+[data-testid="chatAvatarIcon-user"] > *,
+[data-testid="chatAvatarIcon-assistant"] > *{opacity:0 !important;}
+[data-testid="stChatMessageAvatarAssistant"],
+[data-testid="chatAvatarIcon-assistant"]{
+  background-image:radial-gradient(circle, #fff 0 9%, var(--ciano) 24%, rgba(0,224,255,0) 60%) !important;
+  box-shadow:inset 0 0 12px rgba(0,224,255,.55);
+}
+[data-testid="stChatMessageAvatarUser"],
+[data-testid="chatAvatarIcon-user"]{
+  border-color:var(--reator);
+  background-image:radial-gradient(circle, #fff 0 9%, var(--reator) 24%, rgba(255,122,26,0) 60%) !important;
+  box-shadow:inset 0 0 12px rgba(255,122,26,.55);
+}
+
 /* Expanders e imagens */
 [data-testid="stExpander"]{background:var(--painel); border:1px solid var(--linha); border-radius:0; clip-path:var(--chanfro);}
 [data-testid="stImage"] img{border:1px solid var(--linha); border-radius:0;}
@@ -87,6 +199,25 @@ h2,h3{font-size:.95rem !important; color:var(--texto);}
 .chips{display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.7rem; font-family:'Share Tech Mono',monospace;}
 .chip{font-family:'Share Tech Mono',monospace !important; font-size:.8rem; color:var(--suave); border:1px solid var(--linha); padding:.15rem .7rem;}
 .chip b{color:var(--ciano); font-weight:400;}
+
+.voz{margin-top:.8rem; padding:.55rem .9rem; border-left:2px solid var(--reator); background:rgba(255,122,26,.06); color:var(--texto);}
+.voz b{font-family:'Share Tech Mono',monospace; font-weight:400; font-size:.75rem; letter-spacing:.14em; color:var(--reator); margin-right:.6rem;}
+
+.risco{--cor:var(--suave); display:flex; align-items:flex-start; gap:.7rem; margin-top:.9rem; padding:.55rem .9rem;
+  border:1px solid var(--cor); border-left-width:4px; background:rgba(255,255,255,.02);}
+.risco i{flex:none; width:10px; height:10px; margin-top:.45rem; border-radius:50%; background:var(--cor); box-shadow:0 0 12px var(--cor);}
+.risco b{flex:none; font-family:'Orbitron',sans-serif; font-weight:500; font-size:.78rem; letter-spacing:.14em; color:var(--cor); margin-top:.1rem;}
+.risco span{color:var(--texto); font-size:.98rem;}
+.risco.verde{--cor:#3DDC97;}
+.risco.amarelo{--cor:#FFC53D;}
+.risco.vermelho{--cor:#FF4D4D;}
+
+/* Passos do raciocinio ao vivo */
+.passo{font-family:'Share Tech Mono',monospace; font-size:.85rem; color:var(--suave); padding:.1rem 0;}
+.passo span{color:var(--ciano);}
+.passo code{color:var(--texto); background:rgba(0,224,255,.08); padding:0 .35rem;}
+.passo em{font-style:normal; color:var(--ciano); float:right;}
+.passo em.erro{color:var(--reator);}
 
 /* Status no topo */
 .online{display:flex; align-items:center; gap:.6rem; font-family:'Share Tech Mono',monospace; font-size:.8rem; color:var(--suave); margin-bottom:.4rem;}
@@ -226,6 +357,24 @@ with st.sidebar:
     st.header("Entradas")
     upload_img = st.file_uploader("Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"])
     upload_audio = st.file_uploader("Áudio de comando", type=["wav", "mp3", "ogg"])
+    mic_audio = st.audio_input("Falar com o assistente") if hasattr(st, "audio_input") else None
+
+    st.header("Voz")
+    voz_ativa = st.toggle(
+        "Resposta por voz",
+        value=False,
+        help="Respostas longas são resumidas e o resumo é lido em voz alta. A resposta completa continua na tela.",
+    )
+    voz_escolhida = st.selectbox("Voz do assistente", VOZES, disabled=not voz_ativa)
+    estilo_voz = st.selectbox("Estilo de fala", list(ESTILOS), disabled=not voz_ativa)
+    ritmo_voz = st.select_slider("Ritmo da fala", options=list(RITMOS), value="Ágil", disabled=not voz_ativa)
+    tamanho_resumo = st.radio(
+        "Tamanho do resumo falado",
+        list(TAMANHOS),
+        index=list(TAMANHOS).index(TAMANHO_PADRAO),
+        horizontal=True,
+        disabled=not voz_ativa,
+    )
 
     if st.button("Limpar sessão e cache"):
         st.session_state["historico_mensagens"].clear()
@@ -242,71 +391,127 @@ if upload_img:
     with col_preview1:
         st.subheader("Imagem")
         st.image(upload_img, use_container_width=True)
-        with TemporaryDirectory() as tmp_dir:
-            caminho_tmp = Path(tmp_dir) / upload_img.name
-            caminho_tmp.write_bytes(upload_img.getvalue())
-            try:
-                ev_img = despachar_ingestao(EntradaUsuario(tipo="imagem", caminho_arquivo=caminho_tmp))
-                novas_evidencias.append(ev_img)
-            except Exception as e:
-                st.error(f"Erro ao processar imagem: {e}")
+        try:
+            novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
+        except Exception as e:
+            st.error(f"Erro ao processar imagem: {e}")
 
+fontes_audio = []
 if upload_audio:
+    fontes_audio.append((upload_audio, upload_audio.name, "Áudio", False))
+if mic_audio:
+    fontes_audio.append((mic_audio, "gravacao.wav", "Gravação", True))
+
+for arquivo, nome, rotulo, eh_mic in fontes_audio:
     with col_preview2:
-        st.subheader("Áudio")
-        st.audio(upload_audio)
-        with TemporaryDirectory() as tmp_dir:
-            caminho_tmp = Path(tmp_dir) / upload_audio.name
-            caminho_tmp.write_bytes(upload_audio.getvalue())
-            try:
-                ev_audio = despachar_ingestao(EntradaUsuario(tipo="audio", caminho_arquivo=caminho_tmp))
-                novas_evidencias.append(ev_audio)
-                with st.expander("Transcrição Whisper"):
-                    st.write(ev_audio.resumo_informacao)
-            except Exception as e:
-                st.error(f"Erro ao processar áudio: {e}")
+        st.subheader(rotulo)
+        st.audio(arquivo)
+        try:
+            ev_audio = ingerir_cache("audio", nome, arquivo.getvalue())
+            novas_evidencias.append(ev_audio)
+            with st.expander(f"Transcrição Whisper ({rotulo.lower()})"):
+                st.write(ev_audio.resumo_informacao)
+
+            # Gravação nova no microfone: dispara o comando automaticamente
+            if eh_mic:
+                marca = hashlib.md5(arquivo.getvalue()).hexdigest()
+                if marca != st.session_state["mic_processado"]:
+                    st.session_state["mic_processado"] = marca
+                    st.session_state["pergunta_pendente"] = (
+                        "Interprete e execute o comando de voz da gravação, "
+                        "usando as ferramentas quando necessário."
+                    )
+        except Exception as e:
+            st.error(f"Erro ao processar áudio: {e}")
 
 st.session_state["evidencias_ativas"] = novas_evidencias
 
 for msg in st.session_state["historico_mensagens"]:
     with st.chat_message(msg["papel"]):
         st.write(msg["conteudo"])
+        if msg.get("telemetria"):
+            renderizar_telemetria(msg["telemetria"])
+        if msg.get("voz"):
+            renderizar_voz(msg["voz"])
 
-        telemetria = msg.get("telemetria")
-        if telemetria:
-            tempo_ms = telemetria.get("tempo_total_ms", 0)
-            tokens = telemetria.get("tokens_estimados", "N/A")
-            turnos = telemetria.get("total_turnos", 1)
-
-            st.markdown(
-                f'<div class="chips"><span class="chip">TEMPO <b>{tempo_ms} ms</b></span>'
-                f'<span class="chip">TURNOS <b>{turnos}</b></span>'
-                f'<span class="chip">TOKENS <b>{tokens}</b></span></div>',
-                unsafe_allow_html=True,
-            )
-
-            rastro = telemetria.get("rastro_ferramentas", [])
-            if rastro:
-                with st.expander(f"Auditoria de ferramentas ({len(rastro)} ações)"):
-                    for idx, tool in enumerate(rastro, start=1):
-                        st.markdown(f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
-                        st.json({"argumentos": tool["argumentos"], "resultado_banco": tool["resultado"]})
+EXEMPLOS = [
+    "De onde vem a maior parte dos clientes?",
+    "Qual o faturamento por mês, sem contar notas canceladas?",
+    "Quais notas estão vencidas e de quais clientes?",
+    "Quais são os 5 clientes que mais compraram?",
+]
+if not st.session_state["historico_mensagens"]:
+    st.markdown('<p class="sub">Experimente uma pergunta sobre o banco de dados:</p>', unsafe_allow_html=True)
+    colunas_ex = st.columns(2)
+    for i, exemplo in enumerate(EXEMPLOS):
+        if colunas_ex[i % 2].button(exemplo, key=f"exemplo_{i}", use_container_width=True):
+            st.session_state["pergunta_pendente"] = exemplo
+            st.rerun()
 
 comando_chat = st.chat_input("Pergunte sobre as evidências ou peça uma ação")
-if comando_chat:
-    st.session_state["historico_mensagens"].append({"papel": "user", "conteudo": comando_chat})
+pergunta = comando_chat or st.session_state["pergunta_pendente"]
+st.session_state["pergunta_pendente"] = None
 
-    with st.spinner("Raciocinando e consultando ferramentas..."):
+if pergunta:
+    st.session_state["historico_mensagens"].append({"papel": "user", "conteudo": pergunta})
+    with st.chat_message("user"):
+        st.write(pergunta)
+
+    with st.chat_message("assistant"):
+        def ao_evento(ev: dict):
+            """Mostra cada passo do agente assim que acontece."""
+            if ev["tipo"] == "turno":
+                st.markdown(
+                    f'<div class="passo"><span>▸</span> turno {ev["n"]}: modelo analisando</div>',
+                    unsafe_allow_html=True,
+                )
+            elif ev["tipo"] == "ferramenta":
+                falhou = "erro" in (ev["resultado"] or {})
+                if ev["nome"] == "consultar_banco":
+                    args = html.escape(" ".join(str(ev["argumentos"].get("sql", "")).split())[:110])
+                else:
+                    args = html.escape(json.dumps(ev["argumentos"], ensure_ascii=False))
+                st.markdown(
+                    f'<div class="passo"><span>▸</span> <code>{html.escape(ev["nome"])}</code> {args} '
+                    f'<em class="{"erro" if falhou else ""}">{"ERRO" if falhou else "OK"} · {ev["duracao_ms"]} ms</em></div>',
+                    unsafe_allow_html=True,
+                )
+
         try:
-            resultado = executar_agente(comando_chat, st.session_state["evidencias_ativas"])
+            with st.status("Raciocinando e consultando ferramentas...", expanded=True) as status:
+                resultado = executar_agente(
+                    pergunta,
+                    st.session_state["evidencias_ativas"],
+                    ao_evento=ao_evento,
+                )
+                status.update(label="Análise concluída", state="complete", expanded=False)
+
+            # A voz é preparada em paralelo enquanto o texto "digita".
+            futuro_voz = None
+            if voz_ativa:
+                executor = ThreadPoolExecutor(max_workers=1)
+                futuro_voz = executor.submit(preparar_voz, resultado["resposta"], voz_escolhida, tamanho_resumo, estilo_voz, ritmo_voz)
+                executor.shutdown(wait=False)
+
+            st.write_stream(digitar(resultado["resposta"]))
+            renderizar_telemetria(resultado)
+
+            voz = None
+            if futuro_voz:
+                try:
+                    with st.spinner("Preparando a voz..."):
+                        voz = futuro_voz.result()
+                    renderizar_voz(voz, autoplay=True)
+                except Exception as e:
+                    st.caption(f"Não foi possível gerar a voz: {e}")
+
             st.session_state["historico_mensagens"].append({
                 "papel": "assistant",
                 "conteudo": resultado["resposta"],
                 "telemetria": resultado,
+                "voz": voz,
             })
         except Exception as e:
-            st.session_state["historico_mensagens"].append({
-                "papel": "assistant",
-                "conteudo": f"Falha na execução: {type(e).__name__} - {e}",
-            })
-    st.rerun()
+            erro = f"Falha na execução: {type(e).__name__} - {e}"
+            st.error(erro)
+            st.session_state["historico_mensagens"].append({"papel": "assistant", "conteudo": erro})
