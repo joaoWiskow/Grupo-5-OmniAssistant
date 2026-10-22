@@ -1,15 +1,26 @@
+import subprocess
 import sys
 from pathlib import Path
-from src.core.contracts import EntradaUsuario
-from src.core.ingestion import despachar_ingestao
+
+RAIZ = Path(__file__).resolve().parents[1]
+
 
 def testar_lazy_loading():
-    # 1. Processar texto nao deve carregar o modulo de audio
-    entrada_txt = EntradaUsuario(tipo="texto", texto_comando="Ola Omni")
-    despachar_ingestao(entrada_txt)
-    
-    assert "src.audio.processor" not in sys.modules, "FALHA: Modulo de audio carregado indevidamente!"
-    print("PASS: Lazy loading validado com sucesso. Texto puro nao consome memoria de audio.")
+    # Processo limpo: isola de outros testes que ja carregaram src.audio.processor
+    codigo = (
+        "import sys;"
+        "from src.core.contracts import EntradaUsuario;"
+        "from src.core.ingestion import despachar_ingestao;"
+        "despachar_ingestao(EntradaUsuario(tipo='texto', texto_comando='Ola Omni'));"
+        "sys.exit('src.audio.processor' in sys.modules)"
+    )
+    resultado = subprocess.run(
+        [sys.executable, "-c", codigo], cwd=RAIZ, capture_output=True, text=True
+    )
+    assert resultado.returncode == 0, (
+        "FALHA: Modulo de audio carregado indevidamente!\n" + resultado.stderr
+    )
+
 
 if __name__ == "__main__":
     testar_lazy_loading()

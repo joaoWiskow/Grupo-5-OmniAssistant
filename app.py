@@ -4,6 +4,10 @@ import streamlit as st
 from src.core.contracts import EntradaUsuario, EvidenciaMultimodal
 from src.core.ingestion import despachar_ingestao
 from src.core.agent import executar_agente
+from src.core.auth_ui import (
+    checar_guardrails_auth,
+    renderizar_painel_usuario_sidebar,
+)
 from src.tools.local import inicializar_banco
 
 st.set_page_config(page_title="OmniAssistant", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
@@ -135,6 +139,9 @@ h2,h3{font-size:1.05rem !important; color:var(--texto);}
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
+# Portal de autenticação: sem sessão válida, nada abaixo é executado.
+checar_guardrails_auth(tema_hud=False)
+
 # Splash: aparece uma unica vez por sessao e some sozinho (CSS puro)
 if not st.session_state["splash_visto"]:
     st.markdown(
@@ -181,6 +188,7 @@ st.markdown(
 )
 
 with st.sidebar:
+    renderizar_painel_usuario_sidebar(tema_hud=False)
     st.header("Entradas")
     upload_img = st.file_uploader("Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"])
     upload_audio = st.file_uploader("Áudio de comando", type=["wav", "mp3", "ogg"])
@@ -257,7 +265,11 @@ if comando_chat:
 
     with st.spinner("Raciocinando e consultando ferramentas..."):
         try:
-            resultado = executar_agente(comando_chat, st.session_state["evidencias_ativas"])
+            resultado = executar_agente(
+                comando_chat,
+                st.session_state["evidencias_ativas"],
+                token=st.session_state.get("token_sessao"),
+            )
             st.session_state["historico_mensagens"].append({
                 "papel": "assistant",
                 "conteudo": resultado["resposta"],

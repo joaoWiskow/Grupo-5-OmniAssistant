@@ -3,30 +3,34 @@ from time import perf_counter
 from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
-from google.genai import types
 
-from src.core.config import MODEL, criar_cliente_gemini
-from src.core.contracts import EvidenciaMultimodal
-from src.core.resiliencia import gerar_conteudo
+from src.core.auth import (
+    AUTH_ENFORCE,
+    contexto_de_token,
+    despachar_tool_autenticado,
+    obter_contexto_ativo,
+)
+from src.core.colab_nlp import conversar
+from src.core.contracts import ContextoAutenticacao, EvidenciaMultimodal, PapelUsuario
 from src.tools.local import consultar_item, calcular_total, validar_codigo
 from src.tools.validacao import validar_cnpj_cpf, conferir_soma
 from src.tools.dados import consultar_banco, descrever_banco, esquema_para_prompt
 
-_ESQUEMA_CACHE: str | None = None
+_ESQUEMA_CACHE: dict[str, str] = {}
 
 
-def _esquema_banco() -> str:
-    """Lido uma vez por processo; só guarda no cache se vier válido."""
-    global _ESQUEMA_CACHE
-    if _ESQUEMA_CACHE is None:
+def _esquema_banco(papel: PapelUsuario | None = None) -> str:
+    """Esquema filtrado pelo papel; cacheado por papel (nunca entre papéis)."""
+    chave = papel.value if papel else ""
+    if chave not in _ESQUEMA_CACHE:
         try:
-            texto = esquema_para_prompt()
+            texto = esquema_para_prompt(papel)
         except Exception:
             return ""
         if texto:
-            _ESQUEMA_CACHE = texto
+            _ESQUEMA_CACHE[chave] = texto
         return texto
-    return _ESQUEMA_CACHE
+    return _ESQUEMA_CACHE[chave]
 
 
 class CodigoArgs(BaseModel):
@@ -36,9 +40,7 @@ class CodigoArgs(BaseModel):
 
 class TotalArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    quantidade: float = Field(
-        ge=0.1, le=1000.0, description="Quantidade de itens"
-    )
+    quantidade: float = Field(ge=0.1, le=1000.0, description="Quantidade de itens")
     preco_unitario: float = Field(
         ge=0.01, le=100000.0, description="Preco unitario em BRL"
     )
@@ -62,7 +64,8 @@ class TabelaArgs(BaseModel):
 class ConsultaArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     sql: str = Field(
-        min_length=6, max_length=2000,
+        min_length=6,
+        max_length=2000,
         description="UMA consulta SELECT em SQLite (pode usar WITH, JOIN, GROUP BY). Somente leitura.",
     )
 
@@ -70,11 +73,13 @@ class ConsultaArgs(BaseModel):
 class SomaArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     quantidades: list[float] = Field(
-        min_length=1, max_length=200,
+        min_length=1,
+        max_length=200,
         description="Quantidade de cada item da nota, na ordem em que aparecem",
     )
     precos_unitarios: list[float] = Field(
-        min_length=1, max_length=200,
+        min_length=1,
+        max_length=200,
         description="Preco unitario em BRL de cada item, na MESMA ordem das quantidades",
     )
     total_declarado: float = Field(
@@ -86,74 +91,70 @@ class SomaArgs(BaseModel):
     )
 
 
-REGISTRO_TOOLS: dict[
-    str, tuple[Callable[..., dict], type[BaseModel], str]
-] = {
+REGISTRO_TOOLS: dict[str, tuple[Callable[..., dict], type[BaseModel], str]] = {
     "consultar_item": (
         consultar_item,
         CodigoArgs,
-        "Consulta nome, preco e setor de um item por codigo no catalogo SQLite."
+        "Consulta nome, preco e setor de um item por codigo no catalogo SQLite.",
     ),
     "calcular_total": (
         calcular_total,
         TotalArgs,
-        "Calcula o valor total em BRL a partir da quantidade e do preco unitario."
+        "Calcula o valor total em BRL a partir da quantidade e do preco unitario.",
     ),
     "validar_codigo": (
         validar_codigo,
         CodigoArgs,
-        "Valida o formato de um codigo de produto."
+        "Valida o formato de um codigo de produto.",
     ),
     "validar_cnpj_cpf": (
         validar_cnpj_cpf,
         DocumentoArgs,
-        "Confere os digitos verificadores de um CNPJ ou CPF extraido da nota."
+        "Confere os digitos verificadores de um CNPJ ou CPF extraido da nota.",
     ),
     "conferir_soma": (
         conferir_soma,
         SomaArgs,
-        "Confere se a soma de quantidade x preco unitario dos itens bate com o total da nota."
+        "Confere se a soma de quantidade x preco unitario dos itens bate com o total da nota.",
     ),
     "descrever_banco": (
         descrever_banco,
         TabelaArgs,
-        "Mostra as tabelas do banco de dados da empresa (clientes, notas, itens e catalogo) com colunas e exemplos."
+        "Mostra as tabelas do banco de dados da empresa (clientes, notas, itens e catalogo) com colunas e exemplos.",
     ),
     "consultar_banco": (
         consultar_banco,
         ConsultaArgs,
-        "Executa uma consulta SELECT (somente leitura) no banco da empresa para responder perguntas sobre clientes, notas e faturamento."
+        "Executa uma consulta SELECT (somente leitura) no banco da empresa para responder perguntas sobre clientes, notas e faturamento.",
     ),
 }
 
 
-FERRAMENTAS_GEMINI = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name=nome,
-            description=desc,
-            parameters_json_schema=schema.model_json_schema(),
-        )
-        for nome, (_, schema, desc) in REGISTRO_TOOLS.items()
-    ]
-)
+# Formato que o chat template do Llama-3.1 espera em `tools`
+ESQUEMAS_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": nome,
+            "description": desc,
+            "parameters": schema.model_json_schema(),
+        },
+    }
+    for nome, (_, schema, desc) in REGISTRO_TOOLS.items()
+]
 
 
-def despachar_tool(chamada: types.FunctionCall) -> dict:
-    nome = chamada.name
-
+def despachar_tool(nome: str, argumentos: dict | None = None) -> dict:
     if nome not in REGISTRO_TOOLS:
         return {"erro": f"Ferramenta '{nome}' nao autorizada."}
 
     funcao, schema, _ = REGISTRO_TOOLS[nome]
 
     try:
-        args = schema.model_validate(chamada.args or {}).model_dump()
+        args = schema.model_validate(argumentos or {}).model_dump()
         return funcao(**args)
     except Exception as e:
-        return {
-            "erro": f"Argumentos invalidos para {nome}: {type(e).__name__}"
-        }
+        return {"erro": f"Argumentos invalidos para {nome}: {type(e).__name__}"}
 
 
 def avaliar_risco(rastro: list[dict]) -> dict:
@@ -178,7 +179,9 @@ def avaliar_risco(rastro: list[dict]) -> dict:
             if res.get("valido"):
                 aprovadas += 1
             else:
-                vermelho.append(f"{res.get('tipo', 'Documento')} {res.get('documento')}: {res.get('motivo')}")
+                vermelho.append(
+                    f"{res.get('tipo', 'Documento')} {res.get('documento')}: {res.get('motivo')}"
+                )
         else:
             if res.get("confere"):
                 aprovadas += 1
@@ -188,12 +191,20 @@ def avaliar_risco(rastro: list[dict]) -> dict:
                 )
 
     if vermelho:
-        return {"nivel": "vermelho", "rotulo": "DIVERGÊNCIA", "motivos": vermelho + amarelo}
+        return {
+            "nivel": "vermelho",
+            "rotulo": "DIVERGÊNCIA",
+            "motivos": vermelho + amarelo,
+        }
     if amarelo:
         return {"nivel": "amarelo", "rotulo": "ATENÇÃO", "motivos": amarelo}
     if aprovadas:
         plural = "conferência aprovada" if aprovadas == 1 else "conferências aprovadas"
-        return {"nivel": "verde", "rotulo": "CONFERIDO", "motivos": [f"{aprovadas} {plural}."]}
+        return {
+            "nivel": "verde",
+            "rotulo": "CONFERIDO",
+            "motivos": [f"{aprovadas} {plural}."],
+        }
     return {"nivel": "neutro", "rotulo": "SEM CONFERÊNCIA", "motivos": []}
 
 
@@ -201,6 +212,8 @@ def executar_agente(
     pergunta: str,
     evidencias: list[EvidenciaMultimodal],
     ao_evento: Callable[[dict], None] | None = None,
+    contexto: ContextoAutenticacao | None = None,
+    token: str | None = None,
 ) -> dict:
     """Executa o agente multimodal com chamadas explicitas de ferramentas.
 
@@ -221,28 +234,20 @@ def executar_agente(
             # Falha na interface nunca deve derrubar o agente.
             pass
 
+    ctx = contexto or obter_contexto_ativo() or contexto_de_token(token)
+    token_ativo = ctx.token.token if ctx else token
+
     inicio = perf_counter()
     trace_ferramentas = []
-    tokens_usados = 0
     resposta_final = "Limite de chamadas atingido."
-    cliente = criar_cliente_gemini()
 
     payload_usuario = json.dumps(
         {
             "pergunta": pergunta,
-            "evidencias_multimodais": [
-                e.model_dump() for e in evidencias
-            ],
+            "evidencias_multimodais": [e.model_dump() for e in evidencias],
         },
         ensure_ascii=False,
     )
-
-    historico = [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=payload_usuario)],
-        )
-    ]
 
     system_instruction = (
         "Voce e o especialista em triagem financeira e faturamento "
@@ -289,108 +294,85 @@ def executar_agente(
         "apagou registros. Nao misture dados do banco com os da nota enviada."
     )
 
-    esquema = _esquema_banco()
+    esquema = _esquema_banco(ctx.usuario.papel if ctx else None)
     if esquema:
         system_instruction += (
             "\n\nESQUEMA DO BANCO (use exatamente estes nomes de tabelas, "
             "colunas e valores):\n" + esquema
         )
 
-    config = types.GenerateContentConfig(
-        system_instruction=system_instruction,
-        temperature=0.0,
-        tools=[FERRAMENTAS_GEMINI],
-        automatic_function_calling=(
-            types.AutomaticFunctionCallingConfig(disable=True)
-        ),
-    )
+    mensagens = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user", "content": payload_usuario},
+    ]
 
     for turno in range(6):
         emitir(tipo="turno", n=turno + 1)
 
-        # Semáforo (8 simultâneas) + retry em 429/503 (1 s, 2 s, 4 s).
-        resposta = gerar_conteudo(
-            cliente,
-            model=MODEL,
-            contents=historico,
-            config=config,
+        resposta = conversar(
+            mensagens,
+            ferramentas=ESQUEMAS_TOOLS,
+            max_new_tokens=512,
+            token=token_ativo,
         )
 
-        if (
-            resposta.usage_metadata
-            and resposta.usage_metadata.total_token_count
-        ):
-            tokens_usados += resposta.usage_metadata.total_token_count
+        erro = resposta.get("erro")
+        if erro:
+            resposta_final = f"Nao consegui falar com o modelo do Colab. {erro}"
+            break
 
-        candidato = (
-            resposta.candidates[0].content
-            if resposta.candidates
-            else None
+        texto = (resposta.get("texto") or "").strip()
+        chamada = resposta.get("tool_call")
+
+        if not chamada:
+            resposta_final = texto or "Resposta conclusiva emitida."
+            break
+
+        nome = chamada.get("name", "")
+        argumentos = chamada.get("arguments") or {}
+
+        # O template do Llama so aceita uma chamada por mensagem.
+        mensagens.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": nome, "arguments": argumentos}}],
+            }
         )
 
-        if not candidato:
-            resposta_final = "Sem resposta do modelo."
-            break
+        t0 = perf_counter()
+        resultado = (
+            despachar_tool_autenticado(nome, argumentos, contexto=ctx, token=token)
+            if AUTH_ENFORCE
+            else despachar_tool(nome, argumentos)
+        )
+        duracao_ms = round((perf_counter() - t0) * 1000, 1)
 
-        historico.append(candidato)
-
-        chamadas = [
-            parte.function_call
-            for parte in (candidato.parts or [])
-            if parte.function_call is not None
-        ]
-
-        if not chamadas:
-            resposta_final = resposta.text or "Resposta conclusiva emitida."
-            break
-
-        partes_resposta = []
-
-        for chamada in chamadas:
-            t0 = perf_counter()
-            resultado = despachar_tool(chamada)
-            duracao_ms = round((perf_counter() - t0) * 1000, 1)
-
-            trace_ferramentas.append({
-                "ferramenta": chamada.name,
-                "argumentos": chamada.args,
+        trace_ferramentas.append(
+            {
+                "ferramenta": nome,
+                "argumentos": argumentos,
                 "resultado": resultado,
                 "duracao_ms": duracao_ms,
-            })
-
-            emitir(
-                tipo="ferramenta",
-                nome=chamada.name,
-                argumentos=dict(chamada.args or {}),
-                resultado=resultado,
-                duracao_ms=duracao_ms,
-            )
-
-            # Devolve o resultado vinculado a chamada original.
-            partes_resposta.append(
-                types.Part.from_function_response(
-                    name=chamada.name,
-                    response={"resultado": resultado},
-                )
-            )
-
-        # O SDK Gemini espera a resposta da ferramenta em uma mensagem USER.
-        historico.append(
-            types.Content(
-                role="user",
-                parts=partes_resposta,
-            )
+            }
         )
+
+        emitir(
+            tipo="ferramenta",
+            nome=nome,
+            argumentos=argumentos,
+            resultado=resultado,
+            duracao_ms=duracao_ms,
+        )
+
+        mensagens.append({"role": "tool", "content": resultado})
 
     return {
         "resposta": resposta_final,
         "rastro_ferramentas": trace_ferramentas,
         "risco": avaliar_risco(trace_ferramentas),
         "total_turnos": turno + 1,
-        "tokens_estimados": tokens_usados,
-        "tempo_total_ms": round(
-            (perf_counter() - inicio) * 1000, 1
-        ),
+        "tempo_total_ms": round((perf_counter() - inicio) * 1000, 1),
     }
 
 
@@ -399,8 +381,7 @@ if __name__ == "__main__":
         EvidenciaMultimodal(
             origem="visao",
             resumo_informacao=(
-                "Catalogo de demonstracao: item N101, "
-                "preco unitario R$ 2500,00."
+                "Catalogo de demonstracao: item N101, preco unitario R$ 2500,00."
             ),
         ),
         EvidenciaMultimodal(

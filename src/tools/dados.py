@@ -1,4 +1,5 @@
 """Dados de exemplo (clientes e notas) e consulta segura, somente leitura, ao SQLite."""
+
 import os
 import random
 import re
@@ -7,6 +8,8 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
+from src.core.auth import obter_contexto_ativo
+from src.core.contracts import PapelUsuario
 from src.tools.local import DB_PATH
 from src.tools.validacao import _dv_cnpj
 
@@ -147,7 +150,9 @@ def inicializar_dados(total_notas: int = 80) -> None:
             )
 
         pesos = [rng.randint(1, 5) for _ in _CLIENTES]
-        datas = sorted(hoje - timedelta(days=rng.randint(1, 365)) for _ in range(total_notas))
+        datas = sorted(
+            hoje - timedelta(days=rng.randint(1, 365)) for _ in range(total_notas)
+        )
 
         for n, emissao in enumerate(datas, start=1):
             cliente_id = rng.choices(range(1, len(_CLIENTES) + 1), weights=pesos)[0]
@@ -170,8 +175,14 @@ def inicializar_dados(total_notas: int = 80) -> None:
             cur = con.execute(
                 "INSERT INTO notas_fiscais (numero, cliente_id, data_emissao, data_vencimento, valor_total, status) "
                 "VALUES (?,?,?,?,?,?)",
-                (f"NF-{emissao.year}{n:04d}", cliente_id, emissao.isoformat(),
-                 vencimento.isoformat(), round(total, 2), status),
+                (
+                    f"NF-{emissao.year}{n:04d}",
+                    cliente_id,
+                    emissao.isoformat(),
+                    vencimento.isoformat(),
+                    round(total, 2),
+                    status,
+                ),
             )
             con.executemany(
                 "INSERT INTO notas_itens (nota_id, codigo_item, descricao, quantidade, preco_unitario) "
@@ -199,41 +210,77 @@ def reiniciar_dados() -> None:
 # ---------------------------------------------------------------------------
 # Ferramentas do agente (somente leitura)
 # ---------------------------------------------------------------------------
-def descrever_banco(tabela: str = "") -> dict:
+def descrever_banco(tabela: str = "", papel: PapelUsuario | None = None) -> dict:
     """Lista tabelas, colunas, contagem e exemplos de linhas."""
     try:
         con = _conexao_leitura()
     except Exception as e:
         return {"erro": str(e)}
     try:
-        nomes = [r[0] for r in con.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )]
+        nomes = [
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        nomes = [n for n in nomes if not _tabela_oculta(n, papel)]
         if tabela:
             if tabela not in nomes:
-                return {"erro": f"Tabela '{tabela}' não existe.", "tabelas_disponiveis": nomes}
+                return {
+                    "erro": f"Tabela '{tabela}' não existe.",
+                    "tabelas_disponiveis": nomes,
+                }
             nomes = [tabela]
 
         resultado = []
         for nome in nomes:
-            colunas = [{"nome": c[1], "tipo": c[2]} for c in con.execute(f'PRAGMA table_info("{nome}")')]
+            colunas = [
+                {"nome": c[1], "tipo": c[2]}
+                for c in con.execute(f'PRAGMA table_info("{nome}")')
+            ]
             total = con.execute(f'SELECT COUNT(*) FROM "{nome}"').fetchone()[0]
             cur = con.execute(f'SELECT * FROM "{nome}" LIMIT 2')
-            amostra = [dict(zip([d[0] for d in cur.description], linha)) for linha in cur.fetchall()]
-            resultado.append({
-                "tabela": nome,
-                "descricao": DESCRICOES.get(nome, ""),
-                "linhas": total,
-                "colunas": colunas,
-                "amostra": amostra,
-            })
+            amostra = [
+                dict(zip([d[0] for d in cur.description], linha))
+                for linha in cur.fetchall()
+            ]
+            resultado.append(
+                {
+                    "tabela": nome,
+                    "descricao": DESCRICOES.get(nome, ""),
+                    "linhas": total,
+                    "colunas": colunas,
+                    "amostra": amostra,
+                }
+            )
         return {"tabelas": resultado, "observacoes": OBSERVACOES}
     finally:
         con.close()
 
 
-def _autorizar(acao, *_):
-    return 0 if acao in _ACOES_PERMITIDAS else 1  # 0 = OK, 1 = DENY
+_TABELAS_SEMPRE_OCULTAS = {"usuarios", "sqlite_master", "sqlite_schema"}
+
+
+def _papel_ativo() -> PapelUsuario | None:
+    ctx = obter_contexto_ativo()
+    return ctx.usuario.papel if ctx else None
+
+
+def _tabela_oculta(nome: str, papel: PapelUsuario | None = None) -> bool:
+    if nome in _TABELAS_SEMPRE_OCULTAS:
+        return True
+    return nome == "clientes" and (papel or _papel_ativo()) in (
+        PapelUsuario.ANALISTA,
+        None,
+    )
+
+
+def _autorizar(acao, arg1=None, arg2=None, db=None, trigger=None):
+    if acao not in _ACOES_PERMITIDAS:
+        return 1  # 0 = OK, 1 = DENY
+    if acao == _READ and arg1 and _tabela_oculta(arg1):
+        return 1
+    return 0
 
 
 def _simples(valor):
@@ -254,7 +301,9 @@ def consultar_banco(sql: str) -> dict:
     try:
         con.set_authorizer(_autorizar)
         limite_tempo = time.monotonic() + TEMPO_MAX_S
-        con.set_progress_handler(lambda: 1 if time.monotonic() > limite_tempo else 0, 10000)
+        con.set_progress_handler(
+            lambda: 1 if time.monotonic() > limite_tempo else 0, 10000
+        )
 
         cur = con.execute(texto)
         colunas = [d[0] for d in cur.description]
@@ -271,7 +320,8 @@ def consultar_banco(sql: str) -> dict:
         return {"erro": f"Consulta inválida ou não permitida: {type(e).__name__}: {e}"}
     finally:
         con.close()
-        
+
+
 # Colunas de poucos valores: o modelo precisa ver a grafia exata (acentos, caixa).
 _CATEGORICAS = {
     "clientes": ["estado", "segmento"],
@@ -279,32 +329,39 @@ _CATEGORICAS = {
 }
 
 
-def esquema_para_prompt() -> str:
+def esquema_para_prompt(papel: PapelUsuario | None = None) -> str:
     """Esquema compacto (tabelas, colunas, valores categóricos) para embutir no prompt."""
-    info = descrever_banco()
+    info = descrever_banco(papel=papel)
     if "erro" in info:
         return ""
 
     linhas = []
     for t in info["tabelas"]:
-        cols = ", ".join(f'{c["nome"]} {c["tipo"]}' for c in t["colunas"])
-        linhas.append(f'- {t["tabela"]}({cols})')
+        cols = ", ".join(f"{c['nome']} {c['tipo']}" for c in t["colunas"])
+        linhas.append(f"- {t['tabela']}({cols})")
         if t["descricao"]:
-            linhas.append(f'  {t["descricao"]}')
+            linhas.append(f"  {t['descricao']}")
 
     con = _conexao_leitura()
     try:
         for tabela, colunas in _CATEGORICAS.items():
+            if _tabela_oculta(tabela, papel):
+                continue
             for col in colunas:
                 try:
-                    valores = [r[0] for r in con.execute(
-                        f'SELECT DISTINCT "{col}" FROM "{tabela}" '
-                        f'WHERE "{col}" IS NOT NULL ORDER BY 1'
-                    )]
+                    valores = [
+                        r[0]
+                        for r in con.execute(
+                            f'SELECT DISTINCT "{col}" FROM "{tabela}" '
+                            f'WHERE "{col}" IS NOT NULL ORDER BY 1'
+                        )
+                    ]
                 except sqlite3.Error:
                     continue
                 if valores:
-                    linhas.append(f"Valores de {tabela}.{col}: " + ", ".join(map(str, valores)))
+                    linhas.append(
+                        f"Valores de {tabela}.{col}: " + ", ".join(map(str, valores))
+                    )
     finally:
         con.close()
 

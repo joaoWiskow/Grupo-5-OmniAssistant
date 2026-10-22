@@ -20,6 +20,7 @@ def criar_cliente_gemini() -> genai.Client:
 
 def obter_status_configuracao(nome_squad: str) -> str:
     # TODO: Retorne uma string identificando a squad e os parametros ativos (sem vazar a chave!)
+    
     return f"Squad '{nome_squad}' | Modelo: {MODEL} | Timeout: {TIMEOUT_MS}ms"
 
 if __name__ == "__main__":

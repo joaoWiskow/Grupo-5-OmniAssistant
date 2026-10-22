@@ -6,14 +6,25 @@ from pathlib import Path
 from time import sleep
 from tempfile import TemporaryDirectory
 import streamlit as st
+from src.core.colab_nlp import status_colab
+from src.core.config import MODEL
 from src.core.contracts import EntradaUsuario, EvidenciaMultimodal
 from src.core.ingestion import despachar_ingestao
 from src.core.agent import executar_agente
+from src.core.auth_ui import (
+    checar_guardrails_auth,
+    renderizar_painel_usuario_sidebar,
+)
 from src.core.voz import ESTILOS, RITMOS, TAMANHOS, TAMANHO_PADRAO, VOZES, preparar_voz
 from src.tools.local import inicializar_banco
 from src.tools.dados import inicializar_dados
 
-st.set_page_config(page_title="OmniAssistant", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="OmniAssistant",
+    page_icon="◉",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 inicializar_banco()
 
@@ -24,12 +35,24 @@ def preparar_dados():
     inicializar_dados()
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def status_colab_ui():
+    return status_colab()
+
+
 preparar_dados()
 
-for chave, padrao in {"historico_mensagens": [], "evidencias_ativas": [], "entrou": False, "splash_visto": False,
-                       "mic_processado": None, "pergunta_pendente": None}.items():
+for chave, padrao in {
+    "historico_mensagens": [],
+    "evidencias_ativas": [],
+    "entrou": False,
+    "splash_visto": False,
+    "mic_processado": None,
+    "pergunta_pendente": None,
+}.items():
     if chave not in st.session_state:
         st.session_state[chave] = padrao
+
 
 @st.cache_data(show_spinner="Processando evidência...", max_entries=32)
 def ingerir_cache(tipo: str, nome: str, conteudo: bytes):
@@ -37,7 +60,9 @@ def ingerir_cache(tipo: str, nome: str, conteudo: bytes):
     with TemporaryDirectory() as tmp_dir:
         caminho_tmp = Path(tmp_dir) / nome
         caminho_tmp.write_bytes(conteudo)
-        return despachar_ingestao(EntradaUsuario(tipo=tipo, caminho_arquivo=caminho_tmp))
+        return despachar_ingestao(
+            EntradaUsuario(tipo=tipo, caminho_arquivo=caminho_tmp)
+        )
 
 
 def digitar(texto: str):
@@ -88,7 +113,9 @@ def renderizar_telemetria(telemetria: dict):
         )
         # Sem expander interno: o Streamlit não aceita expander dentro de expander.
         for idx, tool in enumerate(rastro, start=1):
-            st.markdown(f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
+            st.markdown(
+                f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)"
+            )
             res = tool["resultado"] or {}
             if tool["ferramenta"] == "consultar_banco" and res.get("colunas"):
                 st.code(tool["argumentos"].get("sql", ""), language="sql")
@@ -99,7 +126,12 @@ def renderizar_telemetria(telemetria: dict):
                 if res.get("truncado"):
                     st.caption("Resultado truncado no limite de linhas.")
             else:
-                st.json({"argumentos": tool["argumentos"], "resultado_banco": tool["resultado"]})
+                st.json(
+                    {
+                        "argumentos": tool["argumentos"],
+                        "resultado_banco": tool["resultado"],
+                    }
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +331,9 @@ h2,h3{font-size:.95rem !important; color:var(--texto);}
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
+# Portal de autenticação: sem sessão válida, nada abaixo é executado.
+checar_guardrails_auth(tema_hud=True)
+
 # Splash: uma unica vez por sessao, some sozinho (CSS puro)
 if not st.session_state["splash_visto"]:
     st.markdown(
@@ -355,10 +390,15 @@ st.markdown(
 )
 
 with st.sidebar:
+    renderizar_painel_usuario_sidebar(tema_hud=True)
     st.header("Entradas")
-    upload_img = st.file_uploader("Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"])
+    upload_img = st.file_uploader(
+        "Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"]
+    )
     upload_audio = st.file_uploader("Áudio de comando", type=["wav", "mp3", "ogg"])
-    mic_audio = st.audio_input("Falar com o assistente") if hasattr(st, "audio_input") else None
+    mic_audio = (
+        st.audio_input("Falar com o assistente") if hasattr(st, "audio_input") else None
+    )
 
     st.header("Voz")
     voz_ativa = st.toggle(
@@ -373,7 +413,9 @@ with st.sidebar:
         with st.expander("Ajustes da voz"):
             voz_escolhida = st.selectbox("Voz do assistente", VOZES)
             estilo_voz = st.selectbox("Estilo de fala", list(ESTILOS))
-            ritmo_voz = st.select_slider("Ritmo da fala", options=list(RITMOS), value="Ágil")
+            ritmo_voz = st.select_slider(
+                "Ritmo da fala", options=list(RITMOS), value="Ágil"
+            )
             tamanho_resumo = st.radio(
                 "Tamanho do resumo falado",
                 list(TAMANHOS),
@@ -389,12 +431,26 @@ with st.sidebar:
         st.session_state["entrou"] = False
         st.rerun()
 
+    st.divider()
+    st.header("Modelos")
+    st.caption(f"Mídia (Gemini): `{MODEL}`")
+    colab = status_colab_ui()
+    if "erro" in colab:
+        st.caption(f"LLM Colab: indisponível — {colab['erro']}")
+    else:
+        st.caption(f"LLM Colab: `{colab.get('modelo')}` em {colab.get('dispositivo')}")
+    if st.button("Testar conexão com o Colab"):
+        status_colab_ui.clear()
+        st.rerun()
+
 novas_evidencias = []
 previews_audio = []
 
 if upload_img:
     try:
-        novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
+        novas_evidencias.append(
+            ingerir_cache("imagem", upload_img.name, upload_img.getvalue())
+        )
     except Exception as e:
         st.error(f"Erro ao processar imagem: {e}")
 
@@ -456,7 +512,9 @@ if not st.session_state["historico_mensagens"]:
     with st.expander("Sugestões de pergunta"):
         colunas_ex = st.columns(2)
         for i, exemplo in enumerate(EXEMPLOS):
-            if colunas_ex[i % 2].button(exemplo, key=f"exemplo_{i}", use_container_width=True):
+            if colunas_ex[i % 2].button(
+                exemplo, key=f"exemplo_{i}", use_container_width=True
+            ):
                 st.session_state["pergunta_pendente"] = exemplo
                 st.rerun()
 
@@ -465,11 +523,14 @@ pergunta = comando_chat or st.session_state["pergunta_pendente"]
 st.session_state["pergunta_pendente"] = None
 
 if pergunta:
-    st.session_state["historico_mensagens"].append({"papel": "user", "conteudo": pergunta})
+    st.session_state["historico_mensagens"].append(
+        {"papel": "user", "conteudo": pergunta}
+    )
     with st.chat_message("user"):
         st.write(pergunta)
 
     with st.chat_message("assistant"):
+
         def ao_evento(ev: dict):
             """Mostra cada passo do agente assim que acontece."""
             if ev["tipo"] == "turno":
@@ -480,7 +541,9 @@ if pergunta:
             elif ev["tipo"] == "ferramenta":
                 falhou = "erro" in (ev["resultado"] or {})
                 if ev["nome"] == "consultar_banco":
-                    args = html.escape(" ".join(str(ev["argumentos"].get("sql", "")).split())[:110])
+                    args = html.escape(
+                        " ".join(str(ev["argumentos"].get("sql", "")).split())[:110]
+                    )
                 else:
                     args = html.escape(json.dumps(ev["argumentos"], ensure_ascii=False))
                 st.markdown(
@@ -490,19 +553,31 @@ if pergunta:
                 )
 
         try:
-            with st.status("Raciocinando e consultando ferramentas...", expanded=True) as status:
+            with st.status(
+                "Raciocinando e consultando ferramentas...", expanded=True
+            ) as status:
                 resultado = executar_agente(
                     pergunta,
                     st.session_state["evidencias_ativas"],
                     ao_evento=ao_evento,
+                    token=st.session_state.get("token_sessao"),
                 )
-                status.update(label="Análise concluída", state="complete", expanded=False)
+                status.update(
+                    label="Análise concluída", state="complete", expanded=False
+                )
 
             # A voz é preparada em paralelo enquanto o texto "digita".
             futuro_voz = None
             if voz_ativa:
                 executor = ThreadPoolExecutor(max_workers=1)
-                futuro_voz = executor.submit(preparar_voz, resultado["resposta"], voz_escolhida, tamanho_resumo, estilo_voz, ritmo_voz)
+                futuro_voz = executor.submit(
+                    preparar_voz,
+                    resultado["resposta"],
+                    voz_escolhida,
+                    tamanho_resumo,
+                    estilo_voz,
+                    ritmo_voz,
+                )
                 executor.shutdown(wait=False)
 
             st.write_stream(digitar(resultado["resposta"]))
@@ -517,13 +592,17 @@ if pergunta:
                 except Exception as e:
                     st.caption(f"Não foi possível gerar a voz: {e}")
 
-            st.session_state["historico_mensagens"].append({
-                "papel": "assistant",
-                "conteudo": resultado["resposta"],
-                "telemetria": resultado,
-                "voz": voz,
-            })
+            st.session_state["historico_mensagens"].append(
+                {
+                    "papel": "assistant",
+                    "conteudo": resultado["resposta"],
+                    "telemetria": resultado,
+                    "voz": voz,
+                }
+            )
         except Exception as e:
             erro = f"Falha na execução: {type(e).__name__} - {e}"
             st.error(erro)
-            st.session_state["historico_mensagens"].append({"papel": "assistant", "conteudo": erro})
+            st.session_state["historico_mensagens"].append(
+                {"papel": "assistant", "conteudo": erro}
+            )
