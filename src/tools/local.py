@@ -8,7 +8,7 @@ from pathlib import Path
 DB_PATH = Path("data/catalogo.sqlite")
 
 def inicializar_banco() -> None:
-    """Cria a tabela e popula com registros sinteticos da demonstracao."""
+    """Cria a tabela e popula com o catalogo de itens da demonstracao."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute("""
@@ -19,7 +19,7 @@ def inicializar_banco() -> None:
                 setor TEXT NOT NULL
             )
         """)
-        # TODO: Adicione registros realistas adaptados ao caso da sua squad!
+        # Mesmos codigos, nomes e precos de _ITENS em dados.py (o JOIN depende disso).
         dados = [
             ("N101", "Nota Fiscal de Servicos - Consultoria TI", 2500.00, "Servicos"),
             ("N202", "Nota Fiscal de Produtos - Equipamentos", 4750.50, "Produtos"),
@@ -28,7 +28,17 @@ def inicializar_banco() -> None:
             ("N505", "Fatura de Servicos de Cloud", 680.75, "Infraestrutura"),
             ("N606", "Nota Fiscal de Material de Escritorio", 345.80, "Suprimentos"),
             ("N707", "Fatura de Telecomunicacoes", 219.99, "Telecomunicacoes"),
-            ("N808", "Nota Fiscal de Consultoria Financeira", 1800.00, "Consultoria")
+            ("N808", "Nota Fiscal de Consultoria Financeira", 1800.00, "Consultoria"),
+            ("N901", "Nota Fiscal de Dados e Analytics", 3200.00, "Dados"),
+            ("N902", "Serviços de Suporte Operacional", 1450.00, "Operacoes"),
+            ("N903", "Licenciamento de Segurança Cibernética", 2100.00, "Seguranca"),
+            ("N904", "Compra de Equipamentos de Redes", 860.00, "Infraestrutura"),
+            ("N905", "Consultoria em Processos e Operações", 1750.00, "Consultoria"),
+            ("N906", "Fatura de Hardware de Segurança", 990.00, "Seguranca"),
+            ("N907", "Serviços de Infraestrutura e Backup", 1380.00, "Infraestrutura"),
+            ("N908", "Equipamentos de Escritório", 420.00, "Suprimentos"),
+            ("N909", "Licenciamento de ERP", 2600.00, "Software"),
+            ("N910", "Fatura de Escritório Digital", 730.50, "Software"),
         ]
         conn.executemany("INSERT OR IGNORE INTO itens VALUES (?, ?, ?, ?)", dados)
         conn.commit()
@@ -79,5 +89,5 @@ def calcular_total(quantidade: float, preco_unitario: float) -> dict:
 if __name__ == "__main__":
     inicializar_banco()
     print("Banco inicializado:", DB_PATH)
-    print("Teste consulta A101:", consultar_item("A101"))
+    print("Teste consulta N101:", consultar_item("N101"))
     print("Teste calculo 4 x 25.0:", calcular_total(4, 25.0))

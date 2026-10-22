@@ -18,7 +18,10 @@ _SELECT, _READ, _FUNCTION, _RECURSIVE = 21, 20, 31, 33
 _ACOES_PERMITIDAS = {_SELECT, _READ, _FUNCTION, _RECURSIVE}
 
 DESCRICOES = {
-    "clientes": "Clientes cadastrados. 'estado' é a UF com 2 letras; 'segmento' é a área de atuação.",
+    "clientes": (
+        "Empresas parceiras do NAVI. 'segmento' é a categoria da empresa no NAVI; "
+        "'estado' é a UF com 2 letras."
+    ),
     "notas_fiscais": (
         "Notas fiscais emitidas. status: paga | pendente | vencida | cancelada. "
         "valor_total em BRL. Datas em AAAA-MM-DD."
@@ -54,32 +57,24 @@ def _conexao_leitura() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 # Carga de dados de exemplo
 # ---------------------------------------------------------------------------
+# Parceiros reais do NAVI (nome e categoria conforme o site).
+# ATENCAO: cidade/UF sao provisorias (Porto Alegre/RS) porque o site nao as mostra;
+# ajuste quando souber. A RAIES aparece sem categoria no site.
+_CIDADE_PADRAO, _UF_PADRAO = "Porto Alegre", "RS"
+_SEM_CATEGORIA = "Não informado"
+
 _CLIENTES = [
-    ("Comercial Pampa Ltda", "Porto Alegre", "RS", "Varejo"),
-    ("Metalúrgica Gaúcha S.A.", "Caxias do Sul", "RS", "Indústria"),
-    ("Tecnosul Sistemas", "Porto Alegre", "RS", "Tecnologia"),
-    ("Distribuidora Lagoa", "Pelotas", "RS", "Varejo"),
-    ("Agro Campos do Sul", "Santa Maria", "RS", "Agro"),
-    ("Móveis Serra Azul", "Bento Gonçalves", "RS", "Indústria"),
-    ("Clínica Vida Plena", "Canoas", "RS", "Serviços"),
-    ("Logística Rio Guaíba", "Porto Alegre", "RS", "Serviços"),
-    ("Panificadora Trigal", "Novo Hamburgo", "RS", "Varejo"),
-    ("Cooperativa Vale Verde", "Passo Fundo", "RS", "Agro"),
-    ("Grupo Paulista Alimentos", "São Paulo", "SP", "Indústria"),
-    ("Inova Digital Ltda", "Campinas", "SP", "Tecnologia"),
-    ("Atacado Bandeirantes", "Ribeirão Preto", "SP", "Varejo"),
-    ("Construtora Horizonte", "São Paulo", "SP", "Serviços"),
-    ("Têxtil Anhanguera", "Sorocaba", "SP", "Indústria"),
-    ("Porto Norte Logística", "Itajaí", "SC", "Serviços"),
-    ("Eletro Catarina", "Joinville", "SC", "Indústria"),
-    ("Software Floripa", "Florianópolis", "SC", "Tecnologia"),
-    ("Malharia Vale do Itajaí", "Blumenau", "SC", "Indústria"),
-    ("Curitiba Distribuidora", "Curitiba", "PR", "Varejo"),
-    ("Agroindustrial Paraná", "Londrina", "PR", "Agro"),
-    ("Vidraçaria Maringá", "Maringá", "PR", "Indústria"),
-    ("Minas Insumos", "Belo Horizonte", "MG", "Indústria"),
-    ("Café Serra Mineira", "Uberlândia", "MG", "Agro"),
-    ("Carioca Serviços Gerais", "Rio de Janeiro", "RJ", "Serviços"),
+    ("Green Thinking", _CIDADE_PADRAO, _UF_PADRAO, "Sustentabilidade, Energia e Meio Ambiente"),
+    ("RAIES", _CIDADE_PADRAO, _UF_PADRAO, _SEM_CATEGORIA),
+    ("Energia das Coisas", _CIDADE_PADRAO, _UF_PADRAO, "Sustentabilidade, Energia e Meio Ambiente"),
+    ("GreenMotor", _CIDADE_PADRAO, _UF_PADRAO, "Agronegócio e AgTechs"),
+    ("Instituto Ceos", _CIDADE_PADRAO, _UF_PADRAO, "Saúde, Biotecnologia e Ciências da Vida"),
+    ("noharm.ai", _CIDADE_PADRAO, _UF_PADRAO, "Saúde, Biotecnologia e Ciências da Vida"),
+    ("Vent", _CIDADE_PADRAO, _UF_PADRAO, "Tecnologia da Informação e Software"),
+    ("GiroLend", _CIDADE_PADRAO, _UF_PADRAO, "Fintechs e Serviços Financeiros"),
+    ("IBIAMA", _CIDADE_PADRAO, _UF_PADRAO, "Games, Mídia e Entretenimento"),
+    ("SymCORE", _CIDADE_PADRAO, _UF_PADRAO, "Tecnologia da Informação e Software"),
+    ("DGM Financeira", _CIDADE_PADRAO, _UF_PADRAO, "Fintechs e Serviços Financeiros"),
 ]
 
 # Mesmos codigos, nomes e precos do catalogo (tabela 'itens' do local.py).
@@ -92,10 +87,20 @@ _ITENS = [
     ("N606", "Nota Fiscal de Material de Escritorio", 345.80),
     ("N707", "Fatura de Telecomunicacoes", 219.99),
     ("N808", "Nota Fiscal de Consultoria Financeira", 1800.00),
+    ("N901", "Nota Fiscal de Dados e Analytics", 3200.00),
+    ("N902", "Serviços de Suporte Operacional", 1450.00),
+    ("N903", "Licenciamento de Segurança Cibernética", 2100.00),
+    ("N904", "Compra de Equipamentos de Redes", 860.00),
+    ("N905", "Consultoria em Processos e Operações", 1750.00),
+    ("N906", "Fatura de Hardware de Segurança", 990.00),
+    ("N907", "Serviços de Infraestrutura e Backup", 1380.00),
+    ("N908", "Equipamentos de Escritório", 420.00),
+    ("N909", "Licenciamento de ERP", 2600.00),
+    ("N910", "Fatura de Escritório Digital", 730.50),
 ]
 
 
-def inicializar_dados(total_notas: int = 80) -> None:
+def inicializar_dados(total_notas: int = 120) -> None:
     """Cria as tabelas e, se estiverem vazias, carrega clientes e notas de exemplo."""
     caminho_banco().parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(caminho_banco())
@@ -136,6 +141,7 @@ def inicializar_dados(total_notas: int = 80) -> None:
         rng = random.Random(7)
         hoje = date.today()
 
+        # CNPJs gerados apenas para a demonstracao (NAO sao os CNPJs reais dos parceiros).
         for i, (nome, cidade, uf, segmento) in enumerate(_CLIENTES, start=1):
             base = f"{10000000 + i * 1111111:08d}0001"
             cnpj = base + _dv_cnpj([int(c) for c in base])
@@ -151,7 +157,7 @@ def inicializar_dados(total_notas: int = 80) -> None:
 
         for n, emissao in enumerate(datas, start=1):
             cliente_id = rng.choices(range(1, len(_CLIENTES) + 1), weights=pesos)[0]
-            itens = rng.sample(_ITENS, rng.randint(1, 4))
+            itens = rng.sample(_ITENS, rng.randint(1, 5))
             linhas, total = [], 0.0
             for codigo, descricao, preco in itens:
                 qtd = float(rng.randint(1, 8))
@@ -271,7 +277,8 @@ def consultar_banco(sql: str) -> dict:
         return {"erro": f"Consulta inválida ou não permitida: {type(e).__name__}: {e}"}
     finally:
         con.close()
-        
+
+
 # Colunas de poucos valores: o modelo precisa ver a grafia exata (acentos, caixa).
 _CATEGORICAS = {
     "clientes": ["estado", "segmento"],
@@ -304,7 +311,8 @@ def esquema_para_prompt() -> str:
                 except sqlite3.Error:
                     continue
                 if valores:
-                    linhas.append(f"Valores de {tabela}.{col}: " + ", ".join(map(str, valores)))
+                    # " | " porque os segmentos do NAVI já contêm vírgulas.
+                    linhas.append(f"Valores de {tabela}.{col}: " + " | ".join(map(str, valores)))
     finally:
         con.close()
 

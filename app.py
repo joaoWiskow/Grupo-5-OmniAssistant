@@ -112,30 +112,48 @@ def montar_markdown(
     return "\n".join(partes)
 
 
-def renderizar_exportacao(
-    pergunta: str, resposta: str, telemetria: dict | None, chave: str
-):
-    st.download_button(
-        "Exportar .md",
-        data=montar_markdown(pergunta, resposta, telemetria).encode("utf-8"),
-        file_name="resposta_omniassistant.md",
-        mime="text/markdown",
-        key=chave,
-    )
+def montar_markdown_conversa(historico: list[dict]) -> str:
+    """Junta, em um único .md, todas as respostas da conversa."""
+    blocos = []
+    for msg in historico:
+        if msg["papel"] == "assistant" and msg.get("telemetria"):
+            blocos.append(
+                montar_markdown(
+                    msg.get("pergunta", ""), msg["conteudo"], msg["telemetria"]
+                )
+            )
+    return "\n\n---\n\n".join(blocos)
 
 
-def renderizar_exportacao_financeira(historico: list[dict]):
-    conteudo = montar_csv_financeiro(historico)
-    if not conteudo:
+def renderizar_exportacoes(historico: list[dict]):
+    """Botões de exportação lado a lado: .md da conversa e .csv financeiro."""
+    conteudo_md = montar_markdown_conversa(historico)
+    conteudo_csv = montar_csv_financeiro(historico)
+    if not conteudo_md and not conteudo_csv:
         return
-    st.download_button(
-        "Exportar dados bancários (.csv)",
-        data=conteudo.encode("utf-8"),
-        file_name="dados_bancarios_omniassistant.csv",
-        mime="text/csv",
-        key="csv_financeiro",
-        help="Baixa somente as notas e clientes citados nas análises desta conversa.",
-    )
+    col_md, col_csv, _ = st.columns([1, 1, 2])
+    if conteudo_md:
+        with col_md:
+            st.download_button(
+                "Exportar .md",
+                data=conteudo_md.encode("utf-8"),
+                file_name="conversa_omniassistant.md",
+                mime="text/markdown",
+                key="md_conversa",
+                use_container_width=True,
+                help="Baixa todas as perguntas e respostas desta conversa.",
+            )
+    if conteudo_csv:
+        with col_csv:
+            st.download_button(
+                "Exportar dados bancários (.csv)",
+                data=conteudo_csv.encode("utf-8"),
+                file_name="dados_bancarios_omniassistant.csv",
+                mime="text/csv",
+                key="csv_financeiro",
+                use_container_width=True,
+                help="Baixa somente as notas e clientes citados nas análises desta conversa.",
+            )
 
 
 def renderizar_finalizacao(registro_dict: dict, chave: str):
@@ -261,6 +279,8 @@ html, body, .stApp, [data-testid="stMarkdownContainer"], input, textarea, button
   background-size:auto, auto, 44px 44px, 44px 44px, auto;
 }
 #MainMenu, footer{visibility:hidden;}
+[data-testid="stStatusWidget"], [data-testid="stToolbar"], [data-testid="stDecoration"],
+[data-testid="stAppDeployButton"], .stDeployButton{display:none !important;}
 header[data-testid="stHeader"]{background:transparent;}
 .block-container{padding-top:2rem; max-width:1200px;}
 
@@ -605,10 +625,6 @@ for i, msg in enumerate(st.session_state["historico_mensagens"]):
             renderizar_telemetria(msg["telemetria"])
         if msg.get("voz"):
             renderizar_voz(msg["voz"])
-        if msg["papel"] == "assistant" and msg.get("telemetria"):
-            renderizar_exportacao(
-                msg.get("pergunta", ""), msg["conteudo"], msg["telemetria"], f"md_{i}"
-            )
         if msg["papel"] == "assistant" and (
             msg.get("registro") or (msg.get("telemetria") or {}).get("registro")
         ):
@@ -707,9 +723,6 @@ if pergunta:
 
             # Índice que a mensagem terá no histórico (calculado antes do append)
             idx_msg = len(st.session_state["historico_mensagens"])
-            renderizar_exportacao(
-                pergunta, resultado["resposta"], resultado, f"md_{idx_msg}"
-            )
             # Chave estável: o mesmo painel reaparece do histórico no rerun do clique
             renderizar_finalizacao(resultado["registro"], f"historico_{idx_msg}")
 
@@ -731,4 +744,4 @@ if pergunta:
             )
 
 # Por último, para incluir também a resposta gerada neste mesmo run.
-renderizar_exportacao_financeira(st.session_state["historico_mensagens"])
+renderizar_exportacoes(st.session_state["historico_mensagens"])
