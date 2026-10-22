@@ -32,7 +32,7 @@ def processar_imagem(caminho: Path) -> EvidenciaMultimodal:
     
     # TODO: Personalize a system instruction com o contexto de negocio da sua squad!
     system_instruction = (
-    "Voce e o especialista em triagem financeira e faturamento do OmniAssistant, "
+    "Voce e o especialista em triagem financeira e faturamento do NAVI, "
     "responsavel por interpretar prints de notas fiscais e comandos de voz de gestores. "
     "Extraia apenas fatos, valores, datas, numeros, identificadores e rotulos "
     "que estejam inequivocamente legiveis nas imagens ou claramente compreensiveis "
