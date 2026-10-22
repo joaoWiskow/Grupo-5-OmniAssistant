@@ -6,14 +6,25 @@ from pathlib import Path
 from time import sleep
 from tempfile import TemporaryDirectory
 import streamlit as st
+from dotenv import load_dotenv
 from src.core.contracts import EntradaUsuario, EvidenciaMultimodal
 from src.core.ingestion import despachar_ingestao
 from src.core.agent import executar_agente
+from src.core.contracts import RegistroConversa
+from src.core.exportacao import montar_csv_financeiro
+from src.core.finalizacao import finalizar_registro
 from src.core.voz import ESTILOS, RITMOS, TAMANHOS, TAMANHO_PADRAO, VOZES, preparar_voz
 from src.tools.local import inicializar_banco
 from src.tools.dados import inicializar_dados
 
-st.set_page_config(page_title="OmniAssistant", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
+load_dotenv()
+
+st.set_page_config(
+    page_title="OmniAssistant",
+    page_icon="◉",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 inicializar_banco()
 
@@ -26,10 +37,17 @@ def preparar_dados():
 
 preparar_dados()
 
-for chave, padrao in {"historico_mensagens": [], "evidencias_ativas": [], "entrou": False, "splash_visto": False,
-                       "mic_processado": None, "pergunta_pendente": None}.items():
+for chave, padrao in {
+    "historico_mensagens": [],
+    "evidencias_ativas": [],
+    "entrou": False,
+    "splash_visto": False,
+    "mic_processado": None,
+    "pergunta_pendente": None,
+}.items():
     if chave not in st.session_state:
         st.session_state[chave] = padrao
+
 
 @st.cache_data(show_spinner="Processando evidência...", max_entries=32)
 def ingerir_cache(tipo: str, nome: str, conteudo: bytes):
@@ -37,7 +55,9 @@ def ingerir_cache(tipo: str, nome: str, conteudo: bytes):
     with TemporaryDirectory() as tmp_dir:
         caminho_tmp = Path(tmp_dir) / nome
         caminho_tmp.write_bytes(conteudo)
-        return despachar_ingestao(EntradaUsuario(tipo=tipo, caminho_arquivo=caminho_tmp))
+        return despachar_ingestao(
+            EntradaUsuario(tipo=tipo, caminho_arquivo=caminho_tmp)
+        )
 
 
 def digitar(texto: str):
@@ -60,7 +80,9 @@ def renderizar_voz(voz: dict, autoplay: bool = False):
         st.write(voz["resumo"])
 
 
-def montar_markdown(pergunta: str, resposta: str, telemetria: dict | None = None) -> str:
+def montar_markdown(
+    pergunta: str, resposta: str, telemetria: dict | None = None
+) -> str:
     """Monta o .md da resposta: pergunta, resposta, risco e ferramentas usadas."""
     partes = []
     if pergunta:
@@ -71,13 +93,19 @@ def montar_markdown(pergunta: str, resposta: str, telemetria: dict | None = None
         risco = telemetria.get("risco")
         if risco and risco.get("nivel") != "neutro":
             motivos = "; ".join(risco.get("motivos", []))
-            partes.append(f"## Risco\n\n**{risco['rotulo']}**" + (f" — {motivos}" if motivos else "") + "\n")
+            partes.append(
+                f"## Risco\n\n**{risco['rotulo']}**"
+                + (f" — {motivos}" if motivos else "")
+                + "\n"
+            )
 
         rastro = telemetria.get("rastro_ferramentas", [])
         if rastro:
             linhas = ["## Ferramentas utilizadas\n"]
             for i, tool in enumerate(rastro, start=1):
-                linhas.append(f"{i}. `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
+                linhas.append(
+                    f"{i}. `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)"
+                )
                 sql = tool.get("argumentos", {}).get("sql")
                 if sql:
                     linhas.append(f"\n```sql\n{sql.strip()}\n```\n")
@@ -91,7 +119,9 @@ def montar_markdown(pergunta: str, resposta: str, telemetria: dict | None = None
     return "\n".join(partes)
 
 
-def renderizar_exportacao(pergunta: str, resposta: str, telemetria: dict | None, chave: str):
+def renderizar_exportacao(
+    pergunta: str, resposta: str, telemetria: dict | None, chave: str
+):
     st.download_button(
         "Exportar .md",
         data=montar_markdown(pergunta, resposta, telemetria).encode("utf-8"),
@@ -99,6 +129,65 @@ def renderizar_exportacao(pergunta: str, resposta: str, telemetria: dict | None,
         mime="text/markdown",
         key=chave,
     )
+
+
+def renderizar_exportacao_financeira(historico: list[dict]):
+    conteudo = montar_csv_financeiro(historico)
+    if not conteudo:
+        return
+    st.download_button(
+        "Exportar dados bancários (.csv)",
+        data=conteudo.encode("utf-8"),
+        file_name="dados_bancarios_omniassistant.csv",
+        mime="text/csv",
+        key="csv_financeiro",
+        help="Baixa somente as notas e clientes citados nas análises desta conversa.",
+    )
+
+
+def renderizar_finalizacao(registro_dict: dict, chave: str):
+    """Exibe revisão explícita e só executa integrações após confirmação."""
+    registro = RegistroConversa.model_validate(registro_dict)
+    with st.expander("Enviar dados da análise", expanded=False):
+        st.caption("Revise os dados. Nenhuma integração é executada sem confirmação.")
+        with st.form(f"form_finalizacao_{chave}"):
+            email = st.text_input(
+                "E-mail do destinatário", value=registro.destinatario_email or ""
+            )
+            cliente = st.text_input("Cliente", value=registro.cliente or "")
+            nota = st.text_input("Número da nota", value=registro.numero_nota or "")
+            total = st.number_input(
+                "Total (BRL)",
+                min_value=0.0,
+                value=float(registro.total or 0.0),
+                step=0.01,
+            )
+            confirmar = st.checkbox(
+                "Confirmo que os dados foram revisados", key=f"confirmar_{chave}"
+            )
+            executar = st.form_submit_button("Enviar e-mail", type="primary")
+
+        if executar:
+            if not confirmar:
+                st.error("Confirme a revisão dos dados antes de executar.")
+                return
+            atualizado = registro.model_copy(
+                update={
+                    "destinatario_email": email.strip() or None,
+                    "cliente": cliente.strip() or None,
+                    "numero_nota": nota.strip() or None,
+                    "total": total or None,
+                }
+            )
+            try:
+                resultado = finalizar_registro(
+                    atualizado,
+                )
+                st.success(
+                    f"Operação concluída: {json.dumps(resultado, ensure_ascii=False)}"
+                )
+            except Exception as exc:
+                st.error(f"Operação não concluída: {type(exc).__name__} - {exc}")
 
 
 def renderizar_risco(risco: dict):
@@ -129,7 +218,9 @@ def renderizar_telemetria(telemetria: dict):
         )
         # Sem expander interno: o Streamlit não aceita expander dentro de expander.
         for idx, tool in enumerate(rastro, start=1):
-            st.markdown(f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)")
+            st.markdown(
+                f"**{idx}. Ferramenta:** `{tool['ferramenta']}` ({tool.get('duracao_ms', 0)} ms)"
+            )
             res = tool["resultado"] or {}
             if tool["ferramenta"] == "consultar_banco" and res.get("colunas"):
                 st.code(tool["argumentos"].get("sql", ""), language="sql")
@@ -140,7 +231,12 @@ def renderizar_telemetria(telemetria: dict):
                 if res.get("truncado"):
                     st.caption("Resultado truncado no limite de linhas.")
             else:
-                st.json({"argumentos": tool["argumentos"], "resultado_banco": tool["resultado"]})
+                st.json(
+                    {
+                        "argumentos": tool["argumentos"],
+                        "resultado_banco": tool["resultado"],
+                    }
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +495,13 @@ st.markdown(
 
 with st.sidebar:
     st.header("Entradas")
-    upload_img = st.file_uploader("Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"])
+    upload_img = st.file_uploader(
+        "Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"]
+    )
     upload_audio = st.file_uploader("Áudio de comando", type=["wav", "mp3", "ogg"])
-    mic_audio = st.audio_input("Falar com o assistente") if hasattr(st, "audio_input") else None
+    mic_audio = (
+        st.audio_input("Falar com o assistente") if hasattr(st, "audio_input") else None
+    )
 
     st.header("Voz")
     voz_ativa = st.toggle(
@@ -416,7 +516,9 @@ with st.sidebar:
         with st.expander("Ajustes da voz"):
             voz_escolhida = st.selectbox("Voz do assistente", VOZES)
             estilo_voz = st.selectbox("Estilo de fala", list(ESTILOS))
-            ritmo_voz = st.select_slider("Ritmo da fala", options=list(RITMOS), value="Ágil")
+            ritmo_voz = st.select_slider(
+                "Ritmo da fala", options=list(RITMOS), value="Ágil"
+            )
             tamanho_resumo = st.radio(
                 "Tamanho do resumo falado",
                 list(TAMANHOS),
@@ -437,7 +539,9 @@ previews_audio = []
 
 if upload_img:
     try:
-        novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
+        novas_evidencias.append(
+            ingerir_cache("imagem", upload_img.name, upload_img.getvalue())
+        )
     except Exception as e:
         st.error(f"Erro ao processar imagem: {e}")
 
@@ -489,7 +593,15 @@ for i, msg in enumerate(st.session_state["historico_mensagens"]):
         if msg.get("voz"):
             renderizar_voz(msg["voz"])
         if msg["papel"] == "assistant" and msg.get("telemetria"):
-            renderizar_exportacao(msg.get("pergunta", ""), msg["conteudo"], msg["telemetria"], f"md_{i}")
+            renderizar_exportacao(
+                msg.get("pergunta", ""), msg["conteudo"], msg["telemetria"], f"md_{i}"
+            )
+        if msg["papel"] == "assistant" and (
+            msg.get("registro") or (msg.get("telemetria") or {}).get("registro")
+        ):
+            renderizar_finalizacao(
+                msg.get("registro") or msg["telemetria"]["registro"], f"historico_{i}"
+            )
 
 EXEMPLOS = [
     "De onde vem a maior parte dos clientes?",
@@ -501,7 +613,9 @@ if not st.session_state["historico_mensagens"]:
     with st.expander("Sugestões de pergunta"):
         colunas_ex = st.columns(2)
         for i, exemplo in enumerate(EXEMPLOS):
-            if colunas_ex[i % 2].button(exemplo, key=f"exemplo_{i}", use_container_width=True):
+            if colunas_ex[i % 2].button(
+                exemplo, key=f"exemplo_{i}", use_container_width=True
+            ):
                 st.session_state["pergunta_pendente"] = exemplo
                 st.rerun()
 
@@ -510,11 +624,14 @@ pergunta = comando_chat or st.session_state["pergunta_pendente"]
 st.session_state["pergunta_pendente"] = None
 
 if pergunta:
-    st.session_state["historico_mensagens"].append({"papel": "user", "conteudo": pergunta})
+    st.session_state["historico_mensagens"].append(
+        {"papel": "user", "conteudo": pergunta}
+    )
     with st.chat_message("user"):
         st.write(pergunta)
 
     with st.chat_message("assistant"):
+
         def ao_evento(ev: dict):
             """Mostra cada passo do agente assim que acontece."""
             if ev["tipo"] == "turno":
@@ -525,7 +642,9 @@ if pergunta:
             elif ev["tipo"] == "ferramenta":
                 falhou = "erro" in (ev["resultado"] or {})
                 if ev["nome"] == "consultar_banco":
-                    args = html.escape(" ".join(str(ev["argumentos"].get("sql", "")).split())[:110])
+                    args = html.escape(
+                        " ".join(str(ev["argumentos"].get("sql", "")).split())[:110]
+                    )
                 else:
                     args = html.escape(json.dumps(ev["argumentos"], ensure_ascii=False))
                 st.markdown(
@@ -535,19 +654,30 @@ if pergunta:
                 )
 
         try:
-            with st.status("Raciocinando e consultando ferramentas...", expanded=True) as status:
+            with st.status(
+                "Raciocinando e consultando ferramentas...", expanded=True
+            ) as status:
                 resultado = executar_agente(
                     pergunta,
                     st.session_state["evidencias_ativas"],
                     ao_evento=ao_evento,
                 )
-                status.update(label="Análise concluída", state="complete", expanded=False)
+                status.update(
+                    label="Análise concluída", state="complete", expanded=False
+                )
 
             # A voz é preparada em paralelo enquanto o texto "digita".
             futuro_voz = None
             if voz_ativa:
                 executor = ThreadPoolExecutor(max_workers=1)
-                futuro_voz = executor.submit(preparar_voz, resultado["resposta"], voz_escolhida, tamanho_resumo, estilo_voz, ritmo_voz)
+                futuro_voz = executor.submit(
+                    preparar_voz,
+                    resultado["resposta"],
+                    voz_escolhida,
+                    tamanho_resumo,
+                    estilo_voz,
+                    ritmo_voz,
+                )
                 executor.shutdown(wait=False)
 
             st.write_stream(digitar(resultado["resposta"]))
@@ -564,16 +694,28 @@ if pergunta:
 
             # Índice que a mensagem terá no histórico (calculado antes do append)
             idx_msg = len(st.session_state["historico_mensagens"])
-            renderizar_exportacao(pergunta, resultado["resposta"], resultado, f"md_{idx_msg}")
+            renderizar_exportacao(
+                pergunta, resultado["resposta"], resultado, f"md_{idx_msg}"
+            )
+            # Chave estável: o mesmo painel reaparece do histórico no rerun do clique
+            renderizar_finalizacao(resultado["registro"], f"historico_{idx_msg}")
 
-            st.session_state["historico_mensagens"].append({
-                "papel": "assistant",
-                "conteudo": resultado["resposta"],
-                "pergunta": pergunta,
-                "telemetria": resultado,
-                "voz": voz,
-            })
+            st.session_state["historico_mensagens"].append(
+                {
+                    "papel": "assistant",
+                    "conteudo": resultado["resposta"],
+                    "pergunta": pergunta,
+                    "telemetria": resultado,
+                    "registro": resultado["registro"],
+                    "voz": voz,
+                }
+            )
         except Exception as e:
             erro = f"Falha na execução: {type(e).__name__} - {e}"
             st.error(erro)
-            st.session_state["historico_mensagens"].append({"papel": "assistant", "conteudo": erro})
+            st.session_state["historico_mensagens"].append(
+                {"papel": "assistant", "conteudo": erro}
+            )
+
+# Por último, para incluir também a resposta gerada neste mesmo run.
+renderizar_exportacao_financeira(st.session_state["historico_mensagens"])
