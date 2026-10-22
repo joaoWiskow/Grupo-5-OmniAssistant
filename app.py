@@ -399,8 +399,16 @@ st.markdown(
 
 with st.sidebar:
     st.header("Entradas")
-    upload_img = st.file_uploader("Imagem (print ou diagrama)", type=["png", "jpg", "jpeg"])
-    upload_audio = st.file_uploader("Áudio de comando", type=["wav", "mp3", "ogg"])
+    upload_imgs = st.file_uploader(
+        "Imagens (prints ou diagramas)",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
+    upload_audios = st.file_uploader(
+        "Áudios de comando",
+        type=["wav", "mp3", "ogg", "m4a"],
+        accept_multiple_files=True,
+    )
     mic_audio = st.audio_input("Falar com o assistente") if hasattr(st, "audio_input") else None
 
     st.header("Voz")
@@ -435,14 +443,15 @@ with st.sidebar:
 novas_evidencias = []
 previews_audio = []
 
-if upload_img:
-    try:
-        novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
-    except Exception as e:
-        st.error(f"Erro ao processar imagem: {e}")
+if upload_imgs:
+    for upload_img in upload_imgs:
+        try:
+            novas_evidencias.append(ingerir_cache("imagem", upload_img.name, upload_img.getvalue()))
+        except Exception as e:
+            st.error(f"Erro ao processar imagem '{upload_img.name}': {e}")
 
 fontes_audio = []
-if upload_audio:
+for upload_audio in upload_audios or []:
     fontes_audio.append((upload_audio, upload_audio.name, "Áudio", False))
 if mic_audio:
     fontes_audio.append((mic_audio, "gravacao.wav", "Gravação", True))
@@ -463,16 +472,20 @@ for arquivo, nome, rotulo, eh_mic in fontes_audio:
                     "usando as ferramentas quando necessário."
                 )
     except Exception as e:
-        st.error(f"Erro ao processar áudio: {e}")
+        st.error(f"Erro ao processar áudio '{nome}': {e}")
 
 # Pré-visualização compacta: tudo dentro de um expander recolhido
-if upload_img or previews_audio:
+if upload_imgs or previews_audio:
     with st.expander(f"Evidências ativas ({len(novas_evidencias)})"):
-        col_img, col_aud = st.columns(2)
-        with col_img:
-            if upload_img:
-                st.image(upload_img, width=220, caption=upload_img.name)
-        with col_aud:
+        if upload_imgs:
+            st.markdown("**Imagens**")
+            cols = st.columns(min(3, max(1, len(upload_imgs))))
+            for idx, upload_img in enumerate(upload_imgs):
+                with cols[idx % len(cols)]:
+                    st.image(upload_img, width=220, caption=upload_img.name)
+
+        if previews_audio:
+            st.markdown("**Áudios**")
             for rotulo, arquivo, ev_audio in previews_audio:
                 st.markdown(f"**{rotulo}**")
                 st.audio(arquivo)
