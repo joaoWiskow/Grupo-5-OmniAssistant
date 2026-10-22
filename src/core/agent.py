@@ -246,7 +246,7 @@ def executar_agente(
 
     system_instruction = (
         "Voce e o especialista em triagem financeira e faturamento "
-        "do OmniAssistant, responsavel por analisar prints de notas fiscais "
+        "do NAVI, responsavel por analisar prints de notas fiscais "
         "e comandos de voz de gestores. "
         "Extraia apenas fatos, numeros, valores, datas, CNPJs e rotulos "
         "presentes nas evidencias fornecidas. "

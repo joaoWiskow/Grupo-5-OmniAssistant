@@ -13,7 +13,7 @@ from src.core.voz import ESTILOS, RITMOS, TAMANHOS, TAMANHO_PADRAO, VOZES, prepa
 from src.tools.local import inicializar_banco
 from src.tools.dados import inicializar_dados
 
-st.set_page_config(page_title="OmniAssistant", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="NAVI", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
 
 inicializar_banco()
 
@@ -328,16 +328,24 @@ h2,h3{font-size:.95rem !important; color:var(--texto);}
 }
 
 /* ---------------- CAPA ---------------- */
-.capa{display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:3rem; align-items:center; padding:7vh 0 3vh 0;}
-.capa h1{font-size:clamp(2.2rem,5.4vw,4.2rem) !important; line-height:1.08; font-weight:900 !important; margin:0 0 1.4rem 0; letter-spacing:.06em;}
-.capa .lead{font-size:1.25rem; color:var(--suave); max-width:48ch; line-height:1.5; margin:0 0 2.2rem 0;}
-.capa .grafico{display:flex; justify-content:center;}
-.capa .hud{--d:min(380px,38vw);}
-.modulos{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1.4rem; margin-bottom:2rem;}
-.modulos div{border-left:2px solid var(--ciano); padding-left:.9rem;}
-.modulos h3{margin:0 0 .3rem 0 !important; color:var(--ciano) !important;}
-.modulos p{margin:0; color:var(--suave); font-size:.98rem; line-height:1.4;}
-@media (max-width:860px){.capa{grid-template-columns:1fr;} .capa .grafico{order:-1;} .modulos{grid-template-columns:1fr;}}
+.capa{display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); gap:3rem; align-items:center; padding:6vh 0 2vh 0;}
+.capa .centro{display:flex; flex-direction:column; align-items:center; text-align:center; gap:1.2rem; max-width:36ch;}
+.capa .centro .hud{--d:min(340px,28vw);}
+.capa h1{font-size:clamp(2.2rem,5vw,3.6rem) !important; font-weight:900 !important; margin:0; letter-spacing:.35em; padding-left:.35em;}
+.capa .lead{font-size:1.1rem; color:var(--suave); line-height:1.5; margin:0;}
+.capa .lado{display:flex; flex-direction:column; gap:2.2rem;}
+.capa .lado div{border-left:2px solid var(--ciano); padding-left:.9rem;}
+.capa .lado.dir{text-align:right;}
+.capa .lado.dir div{border-left:0; border-right:2px solid var(--ciano); padding:0 .9rem 0 0;}
+.capa .lado h3{margin:0 0 .3rem 0 !important; color:var(--ciano) !important;}
+.capa .lado p{margin:0; color:var(--suave); font-size:.98rem; line-height:1.4;}
+@media (max-width:860px){
+  .capa{grid-template-columns:1fr; gap:2rem;}
+  .capa .centro{order:-1; max-width:none;}
+  .capa .centro .hud{--d:220px;}
+  .capa .lado.dir{text-align:left;}
+  .capa .lado.dir div{border-right:0; border-left:2px solid var(--ciano); padding:0 0 0 .9rem;}
+}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -347,7 +355,7 @@ if not st.session_state["splash_visto"]:
     st.markdown(
         """<div class="splash">
 <div class="hud"><b class="a1"></b><b class="a2"></b><b class="a3"></b><b class="a4"></b><b class="a5"></b><b class="nucleo"></b></div>
-<div class="splash-nome">OMNIASSISTANT</div>
+<div class="splash-nome">NAVI</div>
 <div class="carga"><div class="barra"><i></i></div><div class="pct"></div></div>
 <div class="log">
 <span>módulo de visão <em>OK</em></span>
@@ -368,30 +376,35 @@ if not st.session_state["entrou"]:
     st.markdown(
         """<style>[data-testid="stSidebar"], [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"]{display:none;}</style>
 <div class="capa">
-<div>
-<div class="online"><i></i>sistema online</div>
-<h1>Omni<br>Assistant</h1>
-<p class="lead">Envie um print, um diagrama ou um áudio de comando. O assistente cruza tudo com os dados da empresa e mostra cada passo do raciocínio.</p>
-<div class="modulos">
+<div class="lado">
 <div><h3>Visão</h3><p>Prints e diagramas viram contexto para a conversa.</p></div>
 <div><h3>Voz</h3><p>Comandos falados são transcritos com Whisper.</p></div>
+</div>
+<div class="centro">
+<div class="hud"><b class="a1"></b><b class="a2"></b><b class="a3"></b><b class="a4"></b><b class="a5"></b><b class="nucleo"></b></div>
+<h1>NAVI</h1>
+<p class="lead">Envie um print, um diagrama ou um áudio do seu problema. O assistente que resolve suas dúvidas.</p>
+</div>
+<div class="lado dir">
 <div><h3>Dados</h3><p>Consultas ao banco local com auditoria de cada ferramenta.</p></div>
+<div><h3>Raciocínio</h3><p>Cada passo do agente aparece ao vivo na tela.</p></div>
 </div>
-</div>
-<div class="grafico"><div class="hud"><b class="a1"></b><b class="a2"></b><b class="a3"></b><b class="a4"></b><b class="a5"></b><b class="nucleo"></b></div></div>
 </div>""",
         unsafe_allow_html=True,
     )
-    if st.button("Iniciar sistema", type="primary"):
-        st.session_state["entrou"] = True
-        st.rerun()
+    st.markdown('<div style="height:6vh"></div>', unsafe_allow_html=True)
+    _, meio, _ = st.columns([1, 1, 1])
+    with meio:
+        if st.button("Iniciar sistema", type="primary", use_container_width=True):
+            st.session_state["entrou"] = True
+            st.rerun()
     st.stop()
 
 # ---------------------------------------------------------------------------
 # APLICACAO
 # ---------------------------------------------------------------------------
 st.markdown('<div class="online"><i></i>sistema online</div>', unsafe_allow_html=True)
-st.title("OmniAssistant")
+st.title("NAVI")
 st.markdown(
     '<p class="sub">Análise integrada de imagens, áudios de comando e consultas corporativas.</p>',
     unsafe_allow_html=True,

@@ -1,4 +1,4 @@
-# OmniAssistant
+# NAVI
 
 Assistente multimodal para triagem financeira e faturamento, com suporte a texto, imagens e áudio.
 
