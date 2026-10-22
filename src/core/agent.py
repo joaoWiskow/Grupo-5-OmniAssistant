@@ -7,6 +7,7 @@ from google.genai import types
 
 from src.core.config import MODEL, criar_cliente_gemini
 from src.core.contracts import EvidenciaMultimodal
+from src.core.registro import extrair_registro
 from src.core.resiliencia import gerar_conteudo
 from src.tools.local import consultar_item, calcular_total, validar_codigo
 from src.tools.validacao import validar_cnpj_cpf, conferir_soma
@@ -391,6 +392,12 @@ def executar_agente(
         "tempo_total_ms": round(
             (perf_counter() - inicio) * 1000, 1
         ),
+        "registro": extrair_registro(
+            pergunta,
+            resposta_final,
+            evidencias,
+            avaliar_risco(trace_ferramentas),
+        ).model_dump(mode="json"),
     }
 
 

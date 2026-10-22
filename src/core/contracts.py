@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date
 from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -35,6 +36,33 @@ class EvidenciaMultimodal(ContratoBase):
     resumo_informacao: str = Field(min_length=1)
     segmentos_audio: list[SegmentoFala] = Field(default_factory=list)
     confianca_declarada: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class ItemRegistro(ContratoBase):
+    codigo: str | None = None
+    descricao: str | None = None
+    quantidade: float | None = Field(default=None, ge=0)
+    preco_unitario: float | None = Field(default=None, ge=0)
+    total: float | None = Field(default=None, ge=0)
+
+
+class RegistroConversa(ContratoBase):
+    """Dados confirmáveis extraídos de uma análise, sem substituir a resposta textual."""
+
+    id_operacao: str
+    destinatario_email: str | None = None
+    cliente: str | None = None
+    documento: str | None = None
+    numero_nota: str | None = None
+    data_emissao: date | None = None
+    data_vencimento: date | None = None
+    itens: list[ItemRegistro] = Field(default_factory=list)
+    total: float | None = Field(default=None, ge=0)
+    status: str | None = None
+    risco: Literal["neutro", "verde", "amarelo", "vermelho"] = "neutro"
+    resumo: str
+    pendencias: list[str] = Field(default_factory=list)
+    origem: Literal["conversa"] = "conversa"
 
 if __name__ == "__main__":
     entrada_valida = EntradaUsuario(tipo="texto", texto_comando="Auditar lote 502")

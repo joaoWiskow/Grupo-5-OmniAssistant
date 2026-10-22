@@ -36,6 +36,9 @@ O projeto atende, de fato, as seguintes funções:
 - respostas baseadas em dados do banco de clientes, notas e faturamento;
 - avaliação de risco e divergências de documentação;
 - síntese e reprodução de resposta em voz (via texto para fala), quando disponível.
+- revisão e confirmação dos dados extraídos da conversa;
+- exportação do histórico da conversa para CSV usando apenas Python;
+- envio do resumo da análise por e-mail via SMTP.
 
 ## Fluxo real da aplicação
 
@@ -72,7 +75,8 @@ A aplicação usa:
 
 - Python 3.11+
 - pip
-- chave de API Gemini em um arquivo `.env`
+- chave de API Gemini em um arquivo `.env`;
+- credenciais SMTP, caso queira enviar e-mails;
 - biblioteca de áudio/vision compatível com o ambiente local
 
 ## Instalação
@@ -83,13 +87,38 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Variável de ambiente
+## Variáveis de ambiente
 
 Crie um arquivo `.env` na raiz do projeto com:
 
 ```env
 GEMINI_API_KEY=sua_chave_aqui
 ```
+
+O envio de e-mail usa o SMTP do Google. Ative a verificação em duas etapas na conta,
+crie uma **senha de app** nas configurações da Conta Google e use essa senha, não a
+senha normal da conta. Acrescente ao `.env`:
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=seu-email@gmail.com
+SMTP_PASSWORD=sua_senha_de_app
+SMTP_FROM=seu-email@gmail.com
+```
+
+Para contas Google Workspace, o administrador também pode exigir o uso do Gmail
+SMTP Relay. Nesse caso, substitua o host e as regras de autenticação conforme a
+política da organização.
+
+O CSV é gerado diretamente em memória pelo módulo `src/core/exportacao.py`, a partir
+das consultas ao banco feitas durante a conversa: cada resposta guarda o rastro das
+ferramentas e as linhas retornadas por `consultar_banco` viram linhas do arquivo.
+Assim, o CSV contém apenas os dados financeiros efetivamente consultados, sem a
+conversa em si. O botão de exportação só aparece depois que há uma pergunta
+analisada com resultados de consulta. Não é necessário configurar Google Cloud,
+API key, conta de serviço ou qualquer credencial de planilha. O arquivo baixado
+pode ser aberto no Excel ou importado manualmente no Google Sheets.
 
 ## Executando a aplicação
 
@@ -99,11 +128,40 @@ A interface principal do projeto é a Streamlit localizada em `app.py`:
 streamlit run app.py
 ```
 
+Depois de iniciar:
+
+1. Envie uma imagem, áudio ou texto para análise.
+2. Faça uma pergunta no chat.
+3. Abra **Enviar dados da análise** na resposta.
+4. Revise ou corrija os campos, informe o destinatário e confirme a revisão.
+5. Se necessário, revise os dados e use **Enviar e-mail**.
+6. Use **Exportar dados bancários (.csv)** para baixar as linhas retornadas pelas
+   consultas ao banco desta conversa (clientes, notas, valores, status etc.;
+   as colunas variam conforme a consulta). O botão só aparece depois de uma
+   pergunta analisada com resultados de consulta.
+
+Operações com risco `vermelho` são bloqueadas. Sem as credenciais correspondentes, a aplicação informa a configuração ausente e não simula sucesso.
+
 ## Testes
 
 ```bash
-python -m pytest
+# Suíte completa
+.venv/bin/python -m pytest
+
+# Testes focados no e-mail e nos dados financeiros em CSV
+.venv/bin/python -m pytest tests/test_finalizacao.py tests/test_exportacao.py
 ```
+
+Os testes que chamam o Gemini ou processam áudio/imagem podem exigir API configurada, rede e modelos locais disponíveis. Os testes de finalização usam mocks e não enviam e-mails reais; os testes de CSV criam um banco temporário e validam os campos exportados.
+
+Para verificar a conexão e a autenticação do Gmail SMTP sem enviar uma mensagem:
+
+```bash
+.venv/bin/python -c "import os, smtplib; from pathlib import Path; from dotenv import load_dotenv; load_dotenv(Path('.env')); s=smtplib.SMTP(os.getenv('SMTP_HOST', 'smtp.gmail.com'), int(os.getenv('SMTP_PORT', '587')), timeout=30); s.starttls(); s.login(os.environ['SMTP_USERNAME'], os.environ['SMTP_PASSWORD']); s.quit(); print('SMTP autenticado')"
+```
+
+Esse comando valida apenas TLS e login. O envio real ocorre pelo botão **Enviar
+e-mail**, depois da confirmação dos dados e do destinatário.
 
 ## Observações importantes
 
