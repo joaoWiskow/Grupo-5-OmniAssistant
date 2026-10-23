@@ -1,83 +1,91 @@
 # NAVI
 
-Assistente multimodal para triagem financeira e faturamento, com suporte a texto, imagens e áudio.
+Assistente multimodal para triagem financeira e faturamento, com suporte a texto, imagem, áudio, consulta ao banco local e envio de resumo por e-mail.
 
 ## Visão geral
 
-O projeto é uma aplicação em Python com interface Streamlit para auxiliar a Squad 5 na análise de evidências financeiras e documentais. Ele processa entradas de:
+O NAVI é uma aplicação em Python com interface Streamlit para apoiar a análise de evidências financeiras e documentais. Ele processa entradas de:
 
-- imagens de notas fiscais e documentos;
-- áudios de gestores ou operadores;
-- textos com perguntas e instruções;
+- imagens de notas fiscais, documentos e prints;
+- arquivos de áudio com comando do gestor ou operador;
+- texto com perguntas e instruções;
+- consultas ao banco local de clientes, notas e faturamento.
 
-e combina essas evidências com um agente de IA para responder perguntas sobre:
+O sistema combina essas evidências com um agente baseado em IA e ferramentas explícitas para responder perguntas sobre:
 
 - itens do catálogo;
 - valores e totais;
-- validação de documentos (CPF/CNPJ);
-- conferência de somas de notas;
-- consultas ao banco local de clientes e faturamento;
-- acompanhamento de risco e divergências.
-
-Em outras palavras, o sistema não é apenas um chatbot genérico: ele atua como um assistente de apoio financeiro, com validação de dados e consulta a base local.
+- validação de CPF/CNPJ;
+- conferência de somas de notas fiscais;
+- clientes, notas e faturamento no SQLite;
+- risco e divergências detectadas na análise;
+- resumo em voz da resposta final;
+- revisão final e envio por e-mail do resultado.
 
 ## Funcionalidades implementadas no código
 
 O projeto atende, de fato, as seguintes funções:
 
-- triagem multimodal de evidências de texto, imagem e áudio;
-- extração de informações de notas e documentos;
+- triagem multimodal de texto, imagem e áudio;
+- múltiplos uploads de imagens e áudios na mesma sessão;
+- processamento de imagem com extração textual/visual;
+- transcrição de áudio usando Whisper;
 - validação de códigos de produto no padrão `A123`;
-- consulta de item no catálogo SQLite por código;
+- consulta de item no catálogo por código;
 - cálculo de total em BRL a partir de quantidade e preço unitário;
 - validação de CPF e CNPJ com dígitos verificadores;
-- conferência de somas de itens x total da nota;
-- descrição do schema do banco e execução de consultas SQL somente leitura;
-- respostas baseadas em dados do banco de clientes, notas e faturamento;
-- avaliação de risco e divergências de documentação;
-- síntese e reprodução de resposta em voz (via texto para fala), quando disponível.
-- revisão e confirmação dos dados extraídos da conversa;
-- exportação do histórico da conversa para CSV usando apenas Python;
-- envio do resumo da análise por e-mail via SMTP.
+- conferência de soma dos itens contra o total da nota;
+- descrição do esquema do banco e execução de consultas SQL somente leitura;
+- respostas baseadas em dados de clientes, notas e faturamento;
+- avaliação de risco e alertas de divergência;
+- geração de resposta por voz;
+- revisão dos dados antes do envio;
+- exportação dos dados financeiros consultados em CSV;
+- envio do resumo por e-mail via SMTP.
 
 ## Fluxo real da aplicação
 
 A aplicação usa:
 
 - `app.py` como interface principal em Streamlit;
-- `src/core/agent.py` como agente central, com chamadas explícitas de ferramentas;
-- `src/core/ingestion.py` para despachar texto/imagem/áudio para o processador correto;
+- `src/core/agent.py` como agente central com ferramentas explícitas;
+- `src/core/ingestion.py` para despachar texto, imagem e áudio;
 - `src/vision/processor.py` para processamento de imagem;
 - `src/audio/processor.py` para processamento de áudio;
-- `src/tools/local.py` e `src/tools/dados.py` para acesso ao catálogo e ao banco local;
+- `src/tools/local.py` para o catálogo de itens;
+- `src/tools/dados.py` para o banco de clientes e notas de exemplo;
 - `src/tools/validacao.py` para validações financeiras e documentais;
-- `src/core/config.py` para configuração do cliente Gemini.
+- `src/core/config.py` para configuração do cliente Gemini;
+- `src/core/finalizacao.py` e `src/integrations/email.py` para revisão e envio por e-mail.
 
 ## Estrutura do projeto
 
 ```text
 .
 ├── app.py
-├── config.toml
-├── requirements.txt
 ├── README.md
+├── requirements.txt
+├── config.toml
+├── .env
 ├── data/
+│   └── catalogo.sqlite
 ├── src/
 │   ├── audio/
 │   ├── core/
+│   ├── integrations/
 │   ├── tools/
 │   └── vision/
 ├── tests/
-└── .env.example (se existir no ambiente local)
+└── .venv/
 ```
 
 ## Requisitos
 
 - Python 3.11+
 - pip
-- chave de API Gemini em um arquivo `.env`;
-- credenciais SMTP, caso queira enviar e-mails;
-- biblioteca de áudio/vision compatível com o ambiente local
+- chave de API Gemini no arquivo `.env`
+- credenciais SMTP para envio de e-mail, se quiser usar essa funcionalidade
+- ambiente com suporte a áudio/vision local
 
 ## Instalação
 
@@ -95,9 +103,7 @@ Crie um arquivo `.env` na raiz do projeto com:
 GEMINI_API_KEY=sua_chave_aqui
 ```
 
-O envio de e-mail usa o SMTP do Google. Ative a verificação em duas etapas na conta,
-crie uma **senha de app** nas configurações da Conta Google e use essa senha, não a
-senha normal da conta. Acrescente ao `.env`:
+Para o envio de e-mail, o projeto usa SMTP. Exemplo para Gmail:
 
 ```env
 SMTP_HOST=smtp.gmail.com
@@ -107,22 +113,12 @@ SMTP_PASSWORD=sua_senha_de_app
 SMTP_FROM=seu-email@gmail.com
 ```
 
-Para contas Google Workspace, o administrador também pode exigir o uso do Gmail
-SMTP Relay. Nesse caso, substitua o host e as regras de autenticação conforme a
-política da organização.
-
-O CSV é gerado diretamente em memória pelo módulo `src/core/exportacao.py`, a partir
-das consultas ao banco feitas durante a conversa: cada resposta guarda o rastro das
-ferramentas e as linhas retornadas por `consultar_banco` viram linhas do arquivo.
-Assim, o CSV contém apenas os dados financeiros efetivamente consultados, sem a
-conversa em si. O botão de exportação só aparece depois que há uma pergunta
-analisada com resultados de consulta. Não é necessário configurar Google Cloud,
-API key, conta de serviço ou qualquer credencial de planilha. O arquivo baixado
-pode ser aberto no Excel ou importado manualmente no Google Sheets.
+Importante:
+- para Gmail, normalmente é necessário usar uma senha de app;
+- não use a senha principal da conta;
+- ative a verificação em duas etapas primeiro.
 
 ## Executando a aplicação
-
-A interface principal do projeto é a Streamlit localizada em `app.py`:
 
 ```bash
 streamlit run app.py
@@ -130,47 +126,59 @@ streamlit run app.py
 
 Depois de iniciar:
 
-1. Envie uma imagem, áudio ou texto para análise.
-2. Faça uma pergunta no chat.
-3. Abra **Enviar dados da análise** na resposta.
-4. Revise ou corrija os campos, informe o destinatário e confirme a revisão.
-5. Se necessário, revise os dados e use **Enviar e-mail**.
-6. Use **Exportar dados bancários (.csv)** para baixar as linhas retornadas pelas
-   consultas ao banco desta conversa (clientes, notas, valores, status etc.;
-   as colunas variam conforme a consulta). O botão só aparece depois de uma
-   pergunta analisada com resultados de consulta.
+1. envie uma ou mais imagens e/ou áudios;
+2. faça uma pergunta no chat;
+3. revise a análise e use a seção de envio;
+4. exporte os dados financeiros em CSV quando houver consulta ao banco;
+5. envie por e-mail se o destinatário e as credenciais SMTP estiverem configurados.
 
-Operações com risco `vermelho` são bloqueadas. Sem as credenciais correspondentes, a aplicação informa a configuração ausente e não simula sucesso.
+## Banco de dados local
+
+O banco é SQLite e fica em:
+
+```text
+data/catalogo.sqlite
+```
+
+Ele contém dados de demonstração para:
+
+- `itens` (catálogo de produtos/serviços)
+- `clientes` (empresas/fornecedores)
+- `notas_fiscais` (notas emitidas)
+- `notas_itens` (itens de cada nota)
+
+Para recriar os dados de exemplo, você pode usar as funções de `src/tools/dados.py`:
+
+```bash
+python - <<'PY'
+from src.tools.dados import reiniciar_dados
+reiniciar_dados()
+print('Banco resetado e recarregado')
+PY
+```
 
 ## Testes
 
 ```bash
-# Suíte completa
-.venv/bin/python -m pytest
-
-# Testes focados no e-mail e nos dados financeiros em CSV
-.venv/bin/python -m pytest tests/test_finalizacao.py tests/test_exportacao.py
+python -m pytest
 ```
 
-Os testes que chamam o Gemini ou processam áudio/imagem podem exigir API configurada, rede e modelos locais disponíveis. Os testes de finalização usam mocks e não enviam e-mails reais; os testes de CSV criam um banco temporário e validam os campos exportados.
-
-Para verificar a conexão e a autenticação do Gmail SMTP sem enviar uma mensagem:
+Se quiser validar funções específicas de e-mail e exportação:
 
 ```bash
-.venv/bin/python -c "import os, smtplib; from pathlib import Path; from dotenv import load_dotenv; load_dotenv(Path('.env')); s=smtplib.SMTP(os.getenv('SMTP_HOST', 'smtp.gmail.com'), int(os.getenv('SMTP_PORT', '587')), timeout=30); s.starttls(); s.login(os.environ['SMTP_USERNAME'], os.environ['SMTP_PASSWORD']); s.quit(); print('SMTP autenticado')"
+python -m pytest tests/test_finalizacao.py
+python -m pytest tests/test_exportacao.py
 ```
-
-Esse comando valida apenas TLS e login. O envio real ocorre pelo botão **Enviar
-e-mail**, depois da confirmação dos dados e do destinatário.
 
 ## Observações importantes
 
 - O banco local é SQLite e fica em `data/catalogo.sqlite`.
-- O projeto usa dados de demonstração para clientes, notas fiscais e itens.
+- O projeto usa dados sintéticos para demonstração e testes.
 - As consultas ao banco são tratadas como leitura somente, com validações e regras de segurança.
-- O agente usa chamadas explícitas de ferramentas para evitar que a IA invente respostas ou execute operações não autorizadas.
+- O agente usa ferramentas explícitas para reduzir invento de informações.
 - A validação de risco e a auditoria de divergência são parte do comportamento real da aplicação.
+- Operações com risco grave podem ser bloqueadas antes do envio final.
 
 ## Resumo em uma frase
 
-O OmniAssistant é um assistente multimodal para triagem financeira, capaz de analisar notas fiscais, validar documentos, consultar catálogo e banco local, confirmar somas e responder com contexto e risco.
+O NAVI é um assistente multimodal para triagem financeira e faturamento, capaz de analisar notas fiscais, validar documentos, consultar catálogo e banco local, confirmar somas, exportar dados e enviar a análise por e-mail com contexto e risco.
