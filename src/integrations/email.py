@@ -6,7 +6,7 @@ from email.message import EmailMessage
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def enviar_email(destinatario: str, assunto: str, corpo: str) -> dict:
+def enviar_email(destinatario: str, assunto: str, corpo: str, html: str | None = None) -> dict:
     """Envia e-mail via SMTP configurado; nunca retorna sucesso sem confirmação do servidor."""
     if not EMAIL_RE.fullmatch(destinatario.strip()):
         raise ValueError("Destinatário de e-mail inválido.")
@@ -27,6 +27,8 @@ def enviar_email(destinatario: str, assunto: str, corpo: str) -> dict:
     mensagem["To"] = destinatario.strip()
     mensagem["Subject"] = assunto
     mensagem.set_content(corpo)
+    if html:
+        mensagem.add_alternative(html, subtype="html")
 
     with smtplib.SMTP(host, porta, timeout=30) as servidor:
         servidor.starttls()
